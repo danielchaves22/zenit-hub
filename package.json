@@ -1,0 +1,17 @@
+{
+  "name": "zenit-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.14.0" },
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file-if-exists=.env dist/server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": { "express": "5.2.1", "zod": "3.24.3" },
+  "devDependencies": { "@types/express": "5.0.6", "@types/node": "22.19.0", "tsx": "4.23.15", "typescript": "5.9.3" }
+}
