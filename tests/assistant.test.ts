@@ -3,29 +3,30 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { readConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
+import { createTestStore } from './database-helper.js';
 import { OAuth } from '../src/oauth.js';
 import { Assistant } from '../src/assistant.js';
 import { Day } from '../src/connectors/day.js';
 import { Calendar } from '../src/connectors/calendar.js';
-const config = readConfig({ HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), OPENAI_API_KEY: 'model-secret', OPENAI_MODEL: 'test-model',
+const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), OPENAI_API_KEY: 'model-secret', OPENAI_MODEL: 'test-model',
   DAY_SUPABASE_URL: 'https://example.supabase.co', DAY_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test', DAY_CLIENT_ID: 'client', DAY_CLIENT_SECRET: 'secret' });
 const message = { id: 'wamid.1', sender: 'alice', text: 'O que tenho pendente?', timestamp: Date.now() / 1000 };
-function connection(store: Store, provider: 'day' | 'calendar') {
-  store.connect({ sender: 'alice', provider, accountId: 'alice-account', label: 'alice@example.com',
-    tokens: { access_token: 'provider-secret', refresh_token: 'refresh-secret', expires_at: Date.now() + 3600000 } });
+async function connection(store: Store, provider: 'day' | 'calendar') {
+  (await store.connect({ sender: 'alice', provider, accountId: 'alice-account', label: 'alice@example.com',
+    tokens: { access_token: 'provider-secret', refresh_token: 'refresh-secret', expires_at: Date.now() + 3600000 } }));
 }
 test('existing Cash-only conversations require no additional model call and preserve confirmation buttons', async () => {
-  const store = new Store(':memory:', config.key);
+  const store = (await createTestStore(config.key));
   try {
     let modelCalls = 0; const replies = [{ text: 'Confirme', buttons: [{ id: 'zenit:confirm:1:123', title: 'Confirmar' }] }];
     const cash = { connected: async () => true, message: async (m: unknown) => { assert.equal(m, message); return replies; } };
     const oauth = new OAuth(config, store);
     const assistant = new Assistant(config, store, oauth, cash as any, new Day(oauth), new Calendar(oauth), (async () => { modelCalls++; throw new Error(); }) as typeof fetch);
     assert.deepEqual(await assistant.handle(message), replies); assert.equal(modelCalls, 0);
-  } finally { store.close(); }
+  } finally { (await store.close()); }
 });
 test('cross-application questions query connected tools with server-owned identity; credentials stay out of model context', async () => {
-  const store = new Store(':memory:', config.key); connection(store, 'day'); connection(store, 'calendar');
+  const store = (await createTestStore(config.key)); (await connection(store, 'day')); (await connection(store, 'calendar'));
   try {
     const requests: any[] = []; const senders: string[] = [];
     const oauth = new OAuth(config, store);
@@ -44,10 +45,10 @@ test('cross-application questions query connected tools with server-owned identi
     const serialized = JSON.stringify(requests);
     assert(!serialized.includes('provider-secret')); assert(!serialized.includes('refresh-secret'));
     assert(!requests[0].tools.some((t: any) => t.name.startsWith('cash_')));
-  } finally { store.close(); }
+  } finally { (await store.close()); }
 });
 test('connection commands use no AI and a user cannot confirm another sender grant', async () => {
-  const store = new Store(':memory:', config.key);
+  const store = (await createTestStore(config.key));
   try {
     const oauth = new OAuth(config, store); let modelCalls = 0;
     const assistant = new Assistant(config, store, oauth, {} as any, {} as any, {} as any,
@@ -55,11 +56,11 @@ test('connection commands use no AI and a user cannot confirm another sender gra
     const result = await assistant.handle({ ...message, text: 'Quero conectar meu Day' });
     assert(result[0].text.includes('/connect/')); assert.equal(modelCalls, 0);
     const token = result[0].text.split('/connect/')[1];
-    assert.equal(store.readLink(token, 'link')?.sender, 'alice');
-  } finally { store.close(); }
+    assert.equal((await store.readLink(token, 'link'))?.sender, 'alice');
+  } finally { (await store.close()); }
 });
 test('Day filters owner, archive and status; overfull results are explicitly truncated', async () => {
-  const store = new Store(':memory:', config.key); connection(store, 'day');
+  const store = (await createTestStore(config.key)); (await connection(store, 'day'));
   try {
     const oauth = new OAuth(config, store);
     const day = new Day(oauth, (async (url, init) => {
@@ -73,10 +74,10 @@ test('Day filters owner, archive and status; overfull results are explicitly tru
     const result = await day.subjects('alice', { status: 'pending', dueBefore: null, limit: 1 });
     assert(result.truncated); assert.equal(result.subjects.length, 1);
     await assert.rejects(day.subjects('bob', { status: 'pending', dueBefore: null, limit: 1 }));
-  } finally { store.close(); }
+  } finally { (await store.close()); }
 });
 test('calendar date bounds preserve timezone and refuse reversed or excessive ranges', async () => {
-  const store = new Store(':memory:', config.key); connection(store, 'calendar');
+  const store = (await createTestStore(config.key)); (await connection(store, 'calendar'));
   try {
     const calendar = new Calendar(new OAuth(config, store), (async (url) => {
       const parsed = new URL(String(url));
@@ -87,5 +88,5 @@ test('calendar date bounds preserve timezone and refuse reversed or excessive ra
     const result = await calendar.events('alice', { start: '2026-12-23T00:00:00-03:00', end: '2026-12-24T00:00:00-03:00' });
     assert(result.truncated);
     await assert.rejects(calendar.events('alice', { start: '2026-12-24T00:00:00-03:00', end: '2026-12-23T00:00:00-03:00' }));
-  } finally { store.close(); }
+  } finally { (await store.close()); }
 });

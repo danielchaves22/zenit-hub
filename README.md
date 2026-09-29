@@ -8,7 +8,7 @@ Backend pessoal de conexões para conversar com Cash, Day e Google Calendar pelo
 - Cash: preserva QR Code, vínculo existente, assistente financeiro, mensagens de voz e confirmações por botão. Com somente Cash conectado, o texto vai diretamente ao assistente atual; áudios e `cash: ...` seguem esse caminho mesmo com outras conexões, sem uma chamada adicional de IA no Hub.
 - Day e Calendar: autorização pelo navegador, seguida de confirmação da conta na conversa que originou o pedido. Contas independentes, sem SSO ou senha própria do Hub.
 - Consultas consolidadas por ferramentas. O Day e o Calendar são **somente leitura** nesta versão; alterações financeiras seguem o fluxo existente do Cash.
-- SQLite com credenciais e conteúdo de mensagens cifrados por AES-256-GCM; contexto limitado a 12 mensagens por pessoa e 24 horas.
+- PostgreSQL com credenciais e conteúdo de mensagens cifrados por AES-256-GCM; contexto limitado a 12 mensagens por pessoa e 24 horas.
 - Webhook persistido antes de retornar 202. IDs impedem processamento repetido; o worker é serial e pode ser retomado após reiniciar.
 
 ```text
@@ -19,20 +19,22 @@ WhatsApp → Hub → ponte autenticada do Cash → serviços financeiros
 
 ## Execução local
 
-Node 22.14+ (usa `node:sqlite`, experimental no Node 22). Uma instância do processo por banco SQLite.
+Node 22.14+ dentro da série 22 e PostgreSQL 14+. Use uma base exclusiva, `zenit_hub`, e uma instância do processo. Para hospedagem no Render, veja [o procedimento de publicação](docs/RENDER.md) e o [Blueprint](render.yaml).
 
 ```powershell
 npm ci
 Copy-Item .env.example .env
 # Edite .env sem compartilhar valores de credenciais.
-npm run check
 npm run build
+npm run db:migrate
 npm start
 ```
 
-`GET /health` confirma que o processo iniciou. `HUB_ENCRYPTION_KEY` deve conter 32 bytes aleatórios em base64 e deve ser mantida estável e protegida junto aos backups. Perdê-la impede decifrar conexões existentes. Não use chave do JWT do Cash ou segredos dos provedores como chave do Hub.
+`DATABASE_URL` é obrigatória e aponta para a base do Hub, nunca para a base do Cash. `npm run db:migrate` cria as tabelas em transação e registra a versão; a primeira execução exige um schema vazio. A inicialização verifica a versão, sem criar tabelas. `GET /health` verifica também a conexão PostgreSQL.
 
-O servidor escuta em `127.0.0.1:3210`. Para publicar, coloque um proxy HTTPS nesse host e configure `HUB_PUBLIC_URL` com a origem pública exata. Defina limites de requisições no proxy. Não registre URLs de callback, cabeçalhos Authorization, corpo de mensagens ou parâmetros OAuth nos logs. Faça backup do SQLite usando uma cópia consistente com seu WAL e proteja os arquivos: IDs operacionais de remetentes permanecem visíveis no índice, embora tokens e conteúdo sejam cifrados.
+`HUB_ENCRYPTION_KEY` deve conter 32 bytes aleatórios em base64 e deve ser mantida estável e protegida junto aos backups. Perdê-la impede decifrar conexões existentes. Não use chave do JWT do Cash ou segredos dos provedores como chave do Hub.
+
+Localmente, o servidor escuta em `127.0.0.1:3210`. No Render, defina `HUB_HOST=0.0.0.0`, use o `PORT` fornecido pela plataforma e configure `HUB_PUBLIC_URL` com a origem pública HTTPS exata. Em hospedagem própria, use um proxy HTTPS. Defina limites de requisições na entrada. Não registre URLs de callback, cabeçalhos Authorization, corpo de mensagens ou parâmetros OAuth nos logs. Faça backup da base PostgreSQL `zenit_hub` e proteja os arquivos e a chave: IDs operacionais de remetentes permanecem visíveis no índice, embora tokens e conteúdo sejam cifrados.
 
 ## Configuração dos conectores
 
@@ -88,6 +90,8 @@ No piloto, configure `HUB_ALLOWED_SENDERS` com os identificadores permitidos. De
 
 ## Migração e operação
 
+Esta versão substitui SQLite por PostgreSQL. A base `zenit_hub` verificada no Render estava vazia; não há importação automática de SQLite. Se houver dados locais antigos, preserve o arquivo e sua chave antes da troca.
+
 O código da ponte incorpora a funcionalidade de áudio do Cash (`8aa502a`). A junção é local; a versão publicada somente com áudio ainda não inclui a ponte do Hub. Mantenha o webhook no Cash até publicar a ponte e concluir o piloto abaixo.
 
 1. Publique o código da ponte Cash mantendo o webhook atual e configure os conectores em ambiente de teste.
@@ -95,9 +99,21 @@ O código da ponte incorpora a funcionalidade de áudio do Cash (`8aa502a`). A j
 3. Depois da validação, troque o callback Meta para `HUB_PUBLIC_URL/webhooks/whatsapp`. Um único serviço deve receber cada evento. O número e os vínculos Cash existentes são preservados.
 4. Em rollback, volte o callback ao Cash. Day/Calendar ficam indisponíveis naquele canal, e o fluxo financeiro continua no backend anterior. Preserve o banco e a chave do Hub.
 
+O pool mantém até 5 conexões por processo por padrão (`HUB_DATABASE_POOL_MAX`, entre 2 e 10), incluindo uma sessão reservada ao bloqueio do worker. Use conexão direta PostgreSQL, sem pooler em modo transaction. Durante um deploy, a nova versão recebe webhooks, mas espera o bloqueio da anterior antes de processar a fila. A perda dessa sessão encerra o processo. O encerramento normal espera a operação ativa e libera o banco. A retenção é executada a cada minuto.
+
 O Hub não repete automaticamente uma operação interrompida nem um envio cujo resultado seja incerto. Registros `uncertain` exigem conferência operacional para evitar duplicar efeitos. Uma operação aceita remotamente antes de um timeout pode ter sido concluída. IDs e erros genéricos permitem diagnosticar sem imprimir credenciais. Mídias diferentes de áudio e notificações proativas não fazem parte desta versão. Confirmações de entrega não são sincronizadas de volta aos registros antigos do Cash.
 
 ## Validação
+
+Os testes usam PostgreSQL real em schemas descartáveis de uma base local terminada em `_test`. A configuração é independente de `DATABASE_URL` e recusa hosts remotos. Para usar o ambiente de teste fornecido:
+
+```powershell
+docker compose -f compose.test.yaml up -d --wait
+Copy-Item .env.test.example .env.test
+npm run check
+```
+
+Se já houver um PostgreSQL local, configure `TEST_DATABASE_URL` em `.env.test` com uma base de teste existente. Nunca aponte testes para o Render. O build no Render compila e verifica tipos; os testes devem rodar localmente ou no CI.
 
 `npm run check` testa assinatura, destino do webhook, fila, repetição, criptografia, isolamento por remetente, OAuth/PKCE, CSRF, confirmação final, renovação de tokens, consultas entre domínios, encaminhamento de áudio, indicador de digitação e ingressos HTTP reais com serviços externos simulados. O teste de integração `assistant-runtime` no Cash percorre os dois caminhos (webhook anterior e ponte Hub), incluindo correção por áudio e exatamente um lançamento após o botão revisado.
 

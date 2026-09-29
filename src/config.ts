@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { readDatabaseConfig } from './database.js';
 
 function safeUrl(value: string) {
   const u = new URL(value);
@@ -20,9 +21,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error('O Day exige URL Supabase e chave publicável; chaves administrativas não são aceitas.');
   }
   return {
+    host: z.enum(['127.0.0.1', '0.0.0.0', '::1', '::']).parse(env.HUB_HOST || '127.0.0.1'),
     port: z.coerce.number().int().min(1).max(65535).parse(env.PORT || 3210),
     publicUrl: safeUrl(env.HUB_PUBLIC_URL || 'http://localhost:3210'),
-    databasePath: env.HUB_DATABASE_PATH || './data/hub.sqlite', key, timeZone,
+    database: readDatabaseConfig(env), key, timeZone,
     allowedSenders: new Set((env.HUB_ALLOWED_SENDERS || '').split(',').map(s => s.trim()).filter(Boolean)),
     meta: { version: z.string().regex(/^v\d+\.\d+$/).parse(env.WHATSAPP_API_VERSION || 'v23.0'),
       phoneId: env.WHATSAPP_PHONE_NUMBER_ID || '', token: env.WHATSAPP_ACCESS_TOKEN || '',

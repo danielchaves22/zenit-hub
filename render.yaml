@@ -1,0 +1,51 @@
+# This Blueprint creates a paid web service using an existing PostgreSQL database.
+# No database instance or persistent disk is provisioned here.
+# Optional Day/Google/OpenAI variables are added later in Environment.
+services:
+  - type: web
+    name: zenit-hub
+    runtime: node
+    region: oregon
+    plan: 0.5c-512mb
+    numInstances: 1
+    autoDeployTrigger: off
+    buildCommand: npm ci --include=dev && npm run typecheck && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: NODE_VERSION
+        value: ">=22.14.0 <23"
+      - key: NODE_ENV
+        value: production
+      - key: HUB_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: HUB_DATABASE_POOL_MAX
+        value: 5
+      - key: HUB_TIME_ZONE
+        value: America/Sao_Paulo
+      - key: HUB_ENCRYPTION_KEY
+        generateValue: true
+      - key: HUB_PUBLIC_URL
+        sync: false
+      - key: HUB_ALLOWED_SENDERS
+        sync: false
+      - key: CASH_API_URL
+        sync: false
+      - key: CASH_HUB_SHARED_SECRET
+        generateValue: true
+      - key: CASH_BINDING_PREFIX
+        value: VINCULAR ZENIT
+      - key: WHATSAPP_API_VERSION
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_WEBHOOK_VERIFY_TOKEN
+        generateValue: true

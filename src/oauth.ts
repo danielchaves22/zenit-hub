@@ -26,18 +26,18 @@ export class OAuth {
     return Boolean(s.clientId && s.secret && (provider !== 'day' || this.config.day.url));
   }
   callback(provider: Provider) { return `${this.config.publicUrl}/oauth/${provider}/callback`; }
-  createLink(sender: string, provider: Provider) {
+  async createLink(sender: string, provider: Provider) {
     if (!this.enabled(provider)) throw new PublicError(`O conector ${provider === 'day' ? 'Day' : 'Calendar'} ainda precisa ser configurado no Hub.`);
     const token = randomToken();
-    this.store.cancelLinks(sender, provider);
-    this.store.link(token, sender, provider, {});
+    await this.store.cancelLinks(sender, provider);
+    await this.store.link(token, sender, provider, {});
     return `${this.config.publicUrl}/connect/${token}`;
   }
-  begin(token: string, browser: string) {
-    const link = this.store.takeLink(token, 'link');
+  async begin(token: string, browser: string) {
+    const link = await this.store.takeLink(token, 'link');
     if (!link) throw new PublicError('Este link expirou ou já foi usado. Peça uma nova conexão pelo WhatsApp.');
     const state = randomToken(); const verifier = randomToken(); const s = this.settings(link.provider);
-    this.store.link(state, link.sender, link.provider, { verifier, browser: digest(browser) }, 'state');
+    await this.store.link(state, link.sender, link.provider, { verifier, browser: digest(browser) }, 'state');
     const url = new URL(s.authorize);
     const params: Record<string, string> = { client_id: s.clientId, redirect_uri: this.callback(link.provider), response_type: 'code',
       scope: s.scopes, state, code_challenge: challenge(verifier), code_challenge_method: 'S256' };
@@ -62,9 +62,9 @@ export class OAuth {
     return { access_token: raw.access_token, refresh_token: refresh, expires_at: Date.now() + raw.expires_in * 1000, scope };
   }
   async finish(provider: Provider, state: string, browser: string, code: string) {
-    const saved = this.store.readLink(state, 'state');
+    const saved = await this.store.readLink(state, 'state');
     if (!saved || saved.provider !== provider || !equal(saved.data.browser, digest(browser))) throw new PublicError('A autorização não corresponde a este navegador. Inicie novamente pelo WhatsApp.');
-    this.store.takeLink(state, 'state');
+    if (!await this.store.takeLink(state, 'state')) throw new PublicError('Esta autorização já foi usada.');
     const tokens = await this.exchange(provider, { grant_type: 'authorization_code', code,
       code_verifier: saved.data.verifier, redirect_uri: this.callback(provider) });
     const identity = await jsonRequest(this.fetcher, this.settings(provider).userinfo, { headers: { Authorization: `Bearer ${tokens.access_token}` } });
@@ -77,34 +77,28 @@ export class OAuth {
     }
     const connection: Connection = { sender: saved.sender, provider, accountId: identity.sub, label: identity.email, tokens };
     const confirmation = randomToken();
-    this.store.link(confirmation, saved.sender, provider, connection, 'confirmation');
-    this.store.sendLater(saved.sender, { text: `Autorizar ${provider === 'day' ? 'Day' : 'Google Calendar'} (${connection.label}) nesta conversa?`,
+    await this.store.link(confirmation, saved.sender, provider, connection, 'confirmation');
+    await this.store.sendLater(saved.sender, { text: `Autorizar ${provider === 'day' ? 'Day' : 'Google Calendar'} (${connection.label}) nesta conversa?`,
       buttons: [{ id: `hub:approve:${confirmation}`, title: 'Conectar' }, { id: `hub:deny:${confirmation}`, title: 'Cancelar' }] });
   }
-  approve(sender: string, token: string, approved: boolean) {
-    const pending = this.store.readLink(token, 'confirmation');
-    if (!pending || pending.sender !== sender) throw new PublicError('Esta confirmação expirou ou pertence a outra conversa.');
-    this.store.takeLink(token, 'confirmation');
-    if (approved) {
-      this.store.connect(pending.data as Connection);
-      // Account replacement must not carry private context from the old account.
-      this.store.db.prepare('DELETE FROM history WHERE sender=?').run(sender);
-    }
+  async approve(sender: string, token: string, approved: boolean) {
+    const pending = await this.store.approveLink(sender, token, approved);
+    if (!pending) throw new PublicError('Esta confirmação expirou ou pertence a outra conversa.');
     return approved ? `${pending.provider === 'day' ? 'Day' : 'Google Calendar'} conectado. Suas outras conexões continuam ativas.` : 'Conexão cancelada.';
   }
   async connection(sender: string, provider: Provider) {
-    const connection = this.store.connection(sender, provider);
+    const connection = await this.store.connection(sender, provider);
     if (!connection) throw new PublicError(`Conecte ${provider === 'day' ? 'o Day' : 'o Calendar'} primeiro.`);
     if (connection.tokens.expires_at > Date.now() + 60_000) return connection;
     const key = `${sender}:${provider}`;
     if (!this.refreshing.has(key)) {
       const work = (async () => {
         const tokens = await this.exchange(provider, { grant_type: 'refresh_token', refresh_token: connection.tokens.refresh_token }, connection.tokens);
-        const current = this.store.connection(sender, provider);
-        if (!current || current.accountId !== connection.accountId || current.tokens.refresh_token !== connection.tokens.refresh_token) {
+        const refreshed = await this.store.refreshConnection(connection, tokens);
+        if (!refreshed) {
           throw new PublicError('A conexão foi alterada. Faça a consulta novamente.');
         }
-        const refreshed = { ...connection, tokens }; this.store.connect(refreshed); return refreshed;
+        return refreshed;
       })().finally(() => this.refreshing.delete(key));
       this.refreshing.set(key, work);
     }
