@@ -117,7 +117,9 @@ Configure no Render do Hub:
 | `GOOGLE_CLIENT_ID` | Client ID do cliente OAuth web |
 | `GOOGLE_CLIENT_SECRET` | Secret desse cliente |
 
-O Hub solicita `openid`, `email`, `calendar.events.readonly` e `calendar.calendarlist.readonly`. Em modo de teste, inclua sua conta entre os usuários de teste. Para aplicativos externos em status Testing, o Google emite refresh tokens que expiram em sete dias com esses escopos; trate esse modo como piloto, não como configuração definitiva de uso diário. A publicação/verificação da tela de consentimento depende da configuração do projeto Google.
+O Hub solicita `openid`, `email`, `calendar.events` (consulta, criação, alteração e exclusão de eventos) e `calendar.calendarlist.readonly`. Não solicita administração nem compartilhamento de agendas. Em modo de teste, inclua sua conta entre os usuários de teste. Para aplicativos externos em status Testing, o Google emite refresh tokens que expiram em sete dias com esses escopos; trate esse modo como piloto, não como configuração definitiva de uso diário. A publicação/verificação da tela de consentimento depende da configuração do projeto Google.
+
+A migração 2 cria `calendar_drafts`, sem alterar dados das aplicações de origem. O pre-deploy já executa `npm run db:migrate`; não é preciso aplicar SQL manualmente. Preserve `HUB_ENCRYPTION_KEY`. Após atualizar, conexões antigas de Calendar devem ser autorizadas novamente para conceder escrita. No piloto, valide leitura, criação, edição e exclusão de um evento de teste, sempre revisando a prévia e usando o botão. Confira também cancelamento e clique repetido. Não use compromissos reais de terceiros para esses testes.
 
 ### Zenit Day
 

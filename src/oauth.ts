@@ -5,7 +5,7 @@ import { challenge, digest, equal, randomToken } from './security.js';
 import { jsonRequest } from './http.js';
 import { PublicError, type Connection, type Fetch, type Provider, type Tokens } from './types.js';
 
-const googleScopes = ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events.readonly',
+export const googleScopes = ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly'];
 const tokenSchema = z.object({ access_token: z.string().min(1), refresh_token: z.string().optional(),
   expires_in: z.coerce.number().positive().max(86400 * 365), token_type: z.string().optional(), scope: z.string().optional() });
@@ -56,8 +56,8 @@ export class OAuth {
     const refresh = raw.refresh_token || previous?.refresh_token;
     if (!refresh) throw new PublicError('Não foi concedido acesso contínuo. Revogue a autorização anterior e conecte novamente.');
     const scope = raw.scope ?? previous?.scope;
-    if (provider === 'calendar' && scope && !googleScopes.slice(2).every(s => scope.split(' ').includes(s))) {
-      throw new PublicError('Conceda as permissões de consulta às agendas para concluir a conexão.');
+    if (provider === 'calendar' && (!scope || !googleScopes.slice(2).every(s => scope.split(' ').includes(s)))) {
+      throw new PublicError('Conceda acesso à lista de agendas e à leitura, criação, alteração e exclusão de eventos. Envie "conectar Calendar" para autorizar novamente.');
     }
     return { access_token: raw.access_token, refresh_token: refresh, expires_at: Date.now() + raw.expires_in * 1000, scope };
   }
@@ -78,7 +78,7 @@ export class OAuth {
     const connection: Connection = { sender: saved.sender, provider, accountId: identity.sub, label: identity.email, tokens };
     const confirmation = randomToken();
     await this.store.link(confirmation, saved.sender, provider, connection, 'confirmation');
-    await this.store.sendLater(saved.sender, { text: `Autorizar ${provider === 'day' ? 'Day' : 'Google Calendar'} (${connection.label}) nesta conversa?`,
+    await this.store.sendLater(saved.sender, { text: `Autorizar ${provider === 'day' ? 'Day' : 'Google Calendar'} (${connection.label}) nesta conversa?${provider === 'calendar' ? '\nPermite consultar, criar, alterar e excluir eventos. Cada escrita exige confirmação pelo botão no WhatsApp.' : ''}`,
       buttons: [{ id: `hub:approve:${confirmation}`, title: 'Conectar' }, { id: `hub:deny:${confirmation}`, title: 'Cancelar' }] });
   }
   async approve(sender: string, token: string, approved: boolean) {

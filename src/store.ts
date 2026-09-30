@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { transaction } from './database.js';
 import { schemaVersion } from './migrations.js';
-import { digest, Vault } from './security.js';
+import { digest, randomToken, Vault } from './security.js';
 import type { Connection, Incoming, Provider, Reply, Tokens } from './types.js';
 
 type LinkRow = { sender: string; provider: Provider; data: string; hash: string };
@@ -33,6 +33,7 @@ export class Store {
       await transaction(this.db, async tx => {
         await tx.query("UPDATE inbox SET state='uncertain' WHERE state='processing'");
         await tx.query("UPDATE outbox SET state='uncertain' WHERE state='sending'");
+        await tx.query("UPDATE calendar_drafts SET state='uncertain' WHERE state='executing'");
       });
       return true;
     } catch (error) {
@@ -57,15 +58,16 @@ export class Store {
   private async saveConnection(client: Pool | PoolClient, c: Connection) {
     await client.query(`INSERT INTO connections(sender,provider,data) VALUES($1,$2,$3)
       ON CONFLICT(sender,provider) DO UPDATE SET data=EXCLUDED.data`,
-    [c.sender, c.provider, this.vault.seal(c, `connection:${c.sender}:${c.provider}`)]);
+    [c.sender, c.provider, this.vault.seal(c.provider === 'calendar' ? { ...c, grantId: randomToken() } : c, `connection:${c.sender}:${c.provider}`)]);
+    if (c.provider === 'calendar') await client.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
   }
-  async connect(c: Connection) { await this.saveConnection(this.db, c); }
+  async connect(c: Connection) { await transaction(this.db, tx => this.saveConnection(tx, c)); }
   async refreshConnection(previous: Connection, tokens: Tokens): Promise<Connection | null> {
     const { sender, provider } = previous;
     const { rows } = await this.db.query('SELECT data FROM connections WHERE sender=$1 AND provider=$2', [sender, provider]);
     if (!rows[0]) return null;
     const current = this.vault.open<Connection>(rows[0].data, `connection:${sender}:${provider}`);
-    if (current.accountId !== previous.accountId || current.tokens.refresh_token !== previous.tokens.refresh_token) return null;
+    if (current.grantId !== previous.grantId || current.accountId !== previous.accountId || current.tokens.refresh_token !== previous.tokens.refresh_token) return null;
     const refreshed = { ...current, tokens };
     const result = await this.db.query('UPDATE connections SET data=$1 WHERE sender=$2 AND provider=$3 AND data=$4',
       [this.vault.seal(refreshed, `connection:${sender}:${provider}`), sender, provider, rows[0].data]);
@@ -76,7 +78,34 @@ export class Store {
       await tx.query('DELETE FROM oauth_links WHERE sender=$1 AND provider=$2', [sender, provider]);
       await tx.query('DELETE FROM connections WHERE sender=$1 AND provider=$2', [sender, provider]);
       await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
+      if (provider === 'calendar') await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
     });
+  }
+  async calendarDraft(sender: string, token: string, data: unknown) {
+    const hash = digest(token);
+    await transaction(this.db, async tx => {
+      // Serialize replacements for this sender and bind the draft to the current grant.
+      await tx.query("SELECT sender FROM connections WHERE sender=$1 AND provider='calendar' FOR UPDATE", [sender]);
+      await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
+      await tx.query('INSERT INTO calendar_drafts(hash,sender,data,expires) VALUES($1,$2,$3,$4)',
+        [hash, sender, this.vault.seal(data, `calendar:${hash}:${sender}`), Date.now() + 10 * 60_000]);
+    });
+  }
+  async claimCalendarDraft<T>(sender: string, token: string, approved: boolean): Promise<T | null> {
+    const hash = digest(token);
+    const { rows } = await this.db.query(`UPDATE calendar_drafts SET state=$1
+      WHERE hash=$2 AND sender=$3 AND state='pending' AND expires>$4 RETURNING data`,
+    [approved ? 'executing' : 'cancelled', hash, sender, Date.now()]);
+    return rows[0] ? this.vault.open<T>(rows[0].data, `calendar:${hash}:${sender}`) : null;
+  }
+  async calendarDraftResult(sender: string, token: string): Promise<{ state: string; reply: Reply | null } | null> {
+    const { rows } = await this.db.query('SELECT state,result FROM calendar_drafts WHERE hash=$1 AND sender=$2', [digest(token), sender]);
+    const row = rows[0];
+    return row ? { state: row.state, reply: row.result ? this.vault.open<Reply>(row.result, `calendar-result:${digest(token)}:${sender}`) : null } : null;
+  }
+  async finishCalendarDraft(sender: string, token: string, state: 'done' | 'cancelled' | 'uncertain', reply: Reply) {
+    await this.db.query("UPDATE calendar_drafts SET state=$1,result=$2 WHERE hash=$3 AND sender=$4 AND state='executing'",
+      [state, this.vault.seal(reply, `calendar-result:${digest(token)}:${sender}`), digest(token), sender]);
   }
   async cashDisabled(sender: string) {
     const { rows } = await this.db.query('SELECT cash_disabled FROM sender_state WHERE sender=$1', [sender]);
@@ -166,6 +195,7 @@ export class Store {
   async prune() {
     await transaction(this.db, async tx => {
       await tx.query('DELETE FROM oauth_links WHERE expires<$1', [Date.now()]);
+      await tx.query("DELETE FROM calendar_drafts WHERE expires<$1 AND state<>'executing'", [Date.now() - 30 * 86400_000]);
       await tx.query('DELETE FROM history WHERE created<$1', [Date.now() - 86400_000]);
       await tx.query("DELETE FROM inbox WHERE created<$1 AND state='done'", [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM outbox WHERE created<$1 AND state='sent'", [Date.now() - 30 * 86400_000]);

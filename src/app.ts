@@ -43,7 +43,7 @@ export function createApp(config: Config, store: Store, oauth: OAuth, whatsapp: 
     const browser = randomToken();
     res.cookie('hub_browser', browser, { httpOnly: true, secure: config.publicUrl.startsWith('https:'), sameSite: 'lax', maxAge: 600_000, path: '/' });
     return res.type('html').send(page(`Conectar ${pending.provider === 'day' ? 'Day' : 'Google Calendar'}`,
-      `<p>Você autorizará a conta no serviço correspondente e confirmará a conexão no WhatsApp.</p><form method="post"><input type="hidden" name="csrf" value="${digest(browser)}"><button type="submit">Continuar</button></form>`));
+      `<p>Você autorizará a conta no serviço correspondente e confirmará a conexão no WhatsApp.</p>${pending.provider === 'calendar' ? '<p>O Hub poderá listar suas agendas e consultar, criar, alterar e excluir eventos nas agendas em que sua conta tem permissão. Cada escrita exige uma prévia e confirmação pelo botão no WhatsApp. Você pode desconectar a qualquer momento.</p>' : ''}<form method="post"><input type="hidden" name="csrf" value="${digest(browser)}"><button type="submit">Continuar</button></form>`));
   });
   app.post('/connect/:token', express.urlencoded({ extended: false, limit: '2kb' }), async (req, res) => {
     const browser = cookieValue(req.headers.cookie, 'hub_browser');

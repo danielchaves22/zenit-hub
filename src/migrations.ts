@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 1;
+export const schemaVersion = 2;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -50,6 +50,17 @@ export async function migrate(pool: Pool) {
       // Refuse collisions with tables belonging to another application.
       await client.query(initialSchema);
       await client.query('INSERT INTO hub_schema_migrations(version) VALUES (1)');
+    }
+    if (!rows.some(row => row.version === 2)) {
+      await client.query(`CREATE TABLE calendar_drafts (
+        hash TEXT PRIMARY KEY, sender TEXT NOT NULL, data TEXT NOT NULL,
+        expires BIGINT NOT NULL, state TEXT NOT NULL DEFAULT 'pending'
+          CHECK (state IN ('pending','executing','done','cancelled','uncertain')),
+        result TEXT
+      );
+      CREATE UNIQUE INDEX calendar_drafts_pending ON calendar_drafts(sender) WHERE state='pending';
+      CREATE INDEX calendar_drafts_expires ON calendar_drafts(expires);
+      INSERT INTO hub_schema_migrations(version) VALUES (2);`);
     }
   });
 }

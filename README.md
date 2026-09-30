@@ -7,7 +7,7 @@ Backend pessoal de conexões para conversar com Cash, Day e Google Calendar pelo
 - Entrada única pela WhatsApp Cloud API, validada por assinatura e identificação do número de destino.
 - Cash: preserva QR Code, vínculo existente, assistente financeiro, mensagens de voz e confirmações por botão. Com somente Cash conectado, o texto vai diretamente ao assistente atual; áudios e `cash: ...` seguem esse caminho mesmo com outras conexões, sem uma chamada adicional de IA no Hub.
 - Day e Calendar: autorização pelo navegador, seguida de confirmação da conta na conversa que originou o pedido. Contas independentes, sem SSO ou senha própria do Hub.
-- Consultas consolidadas por ferramentas. O Day e o Calendar são **somente leitura** nesta versão; alterações financeiras seguem o fluxo existente do Cash.
+- Consultas consolidadas por ferramentas. Day permanece somente leitura; Calendar permite consulta, criação, alteração e exclusão de eventos, sempre com prévia e confirmação por botão. Alterações financeiras seguem o fluxo existente do Cash.
 - PostgreSQL com credenciais e conteúdo de mensagens cifrados por AES-256-GCM; contexto limitado a 12 mensagens por pessoa e 24 horas.
 - Webhook persistido antes de retornar 202. IDs impedem processamento repetido; o worker é serial e pode ser retomado após reiniciar.
 
@@ -69,7 +69,11 @@ As consultas retornam somente dados sincronizados; alterações offline ainda n�
 
 Registre um cliente OAuth web no Google Cloud com callback exato `HUB_PUBLIC_URL/oauth/calendar/callback`, habilite Calendar API e configure a tela de consentimento e os usuários de teste ou publicação conforme o ambiente. Configure `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` no Hub.
 
-Escopos: identidade/e-mail, leitura dos eventos e da lista de agendas. A agenda padrão é `primary`; o assistente pode listar outras agendas autorizadas. As consultas exigem datas ISO com fuso e sinalizam resultados limitados. Eventos ainda não podem ser criados nesta versão.
+Escopos: `openid`, `email`, `https://www.googleapis.com/auth/calendar.events` e `https://www.googleapis.com/auth/calendar.calendarlist.readonly`. A agenda padrão é `primary`; o assistente pode listar outras agendas autorizadas, respeitando o papel de leitor/editor no Google. Autorizações antigas de somente leitura precisam ser refeitas com `conectar Calendar`.
+
+Criação, alteração e exclusão de eventos comuns exigem uma prévia determinística com conta, agenda, título e horário, seguida do botão **Confirmar** no WhatsApp. Texto ou voz não confirmam. Os rascunhos ficam cifrados no PostgreSQL, expiram em dez minutos e são vinculados à conexão e ao remetente. Uma nova prévia substitui a anterior; reconectar ou desconectar invalida as pendências. O botão é consumido atomicamente e não repete a operação, inclusive após reinício. O Hub usa um ID próprio ao criar e `If-Match` ao alterar/excluir: mudanças feitas no Google após a prévia exigem nova revisão. Timeouts ficam em `uncertain`, sem repetição automática.
+
+São aceitos eventos com horário ou de dia inteiro, título, descrição, local e lembretes popup do Google (não notificações proativas no WhatsApp). Datas ambíguas e horários incompletos devem ser esclarecidos. Alterar/excluir exige consultar o ID do evento na mesma solicitação. É possível editar uma ocorrência recorrente individual; criação/edição da série inteira, convidados, Google Meet e tipos especiais de evento ainda ficam no Google Calendar. Ao editar/excluir um evento que já possui convidados, a prévia informa os participantes e o possível envio de notificações pelo Google (`sendUpdates=all`).
 
 ### IA e WhatsApp
 
@@ -86,6 +90,7 @@ No piloto, configure `HUB_ALLOWED_SENDERS` com os identificadores permitidos. De
 - `desconectar Cash`: remove o vínculo no Cash e desabilita seu uso no Hub.
 - `cash: ...`: encaminha explicitamente ao assistente financeiro.
 - Perguntas como “Quais contas vencem nesta semana?”, “Quais tarefas estão pendentes?” e “Tenho compromissos amanhã?” usam as conexões autorizadas.
+- “Crie Show Crossroads em 23/12/2026 das 14h às 17h”, “Mude o Show Crossroads de 23/12/2026 para 15h às 18h” ou “Exclua esse compromisso” geram uma prévia; só o botão grava na agenda.
 - Áudio: inicia ou corrige pedidos financeiros no Cash. Respostas e confirmação continuam por texto/botões; perguntas ao Day e Calendar devem ser digitadas.
 
 ## Migração e operação

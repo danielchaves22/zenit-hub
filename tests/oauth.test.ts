@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { readConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
 import { createTestStore } from './database-helper.js';
-import { OAuth } from '../src/oauth.js';
+import { OAuth, googleScopes } from '../src/oauth.js';
 const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
   GOOGLE_CLIENT_ID: 'client', GOOGLE_CLIENT_SECRET: 'secret', DAY_SUPABASE_URL: 'https://example.supabase.co',
   DAY_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test', DAY_CLIENT_ID: 'day-client', DAY_CLIENT_SECRET: 'day-secret' });
@@ -15,7 +15,7 @@ async function setup() {
     calls.push({ url: String(url), init });
     if (String(url).endsWith('zenit_day_hub_connection_check')) return response({ application: 'zenit-day', hub_read_only: true });
     if (String(url).endsWith('userinfo')) return response({ sub: 'account-123', email: 'other@example.com' });
-    return response({ access_token: 'private-token', refresh_token: 'private-refresh', expires_in: 3600, token_type: 'Bearer' });
+    return response({ access_token: 'private-token', refresh_token: 'private-refresh', expires_in: 3600, token_type: 'Bearer', scope: googleScopes.join(' ') });
   }) as typeof fetch);
   return { store, oauth, calls };
 }
@@ -26,6 +26,8 @@ test('OAuth requires the initiating browser and a second approval by the same Wh
     assert((await store.readLink(token, 'link'))); assert((await store.readLink(token, 'link'))); // previews do not consume
     const authorization = new URL((await oauth.begin(token, 'browser-cookie')));
     assert.equal(authorization.searchParams.get('code_challenge_method'), 'S256');
+    assert(authorization.searchParams.get('scope')!.includes('calendar.events '));
+    assert(!authorization.searchParams.get('scope')!.includes('calendar.events.readonly'));
     await assert.rejects(async () => (await oauth.begin(token, 'browser-cookie')));
     const state = authorization.searchParams.get('state')!;
     await assert.rejects(oauth.finish('calendar', state, 'wrong-browser', 'code'));
@@ -71,4 +73,17 @@ test('refresh cannot resurrect a disconnected connection', async () => {
     finish(response({ access_token: 'new', refresh_token: 'new-refresh', expires_in: 3600 }));
     await assert.rejects(request); assert.equal((await store.connection('alice', 'day')), null);
   } finally { (await store.close()); }
+});
+
+test('Google grants require explicit event-write and calendar-list scopes before any connection can be approved', async () => {
+  const store = await createTestStore(config.key);
+  try {
+    for (const scope of [undefined, 'openid email https://www.googleapis.com/auth/calendar.events.readonly', 'https://www.googleapis.com/auth/calendar.events']) {
+      const oauth = new OAuth(config, store, (async () => response({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600, scope })) as typeof fetch);
+      const token = (await oauth.createLink('alice', 'calendar')).split('/').at(-1)!;
+      const state = new URL(await oauth.begin(token, 'browser')).searchParams.get('state')!;
+      await assert.rejects(oauth.finish('calendar', state, 'browser', 'code'), /Conceda acesso/);
+      assert.equal(await store.connection('alice', 'calendar'), null);
+    }
+  } finally { await store.close(); }
 });

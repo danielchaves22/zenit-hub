@@ -25,7 +25,7 @@ test('migrations are repeatable and do not reset persisted encrypted connections
   try {
     await store.connect(connection);
     await Promise.all([migrate(store.db), migrate(store.db)]);
-    assert.equal((await store.db.query('SELECT count(*)::int AS n FROM hub_schema_migrations')).rows[0].n, 1);
+    assert.equal((await store.db.query('SELECT count(*)::int AS n FROM hub_schema_migrations')).rows[0].n, 2);
     assert.deepEqual(await store.connection('alice', 'day'), connection);
     const raw = JSON.stringify((await store.db.query('SELECT * FROM connections')).rows);
     assert(!raw.includes('access-private') && !raw.includes('alice@example.com'));
