@@ -1,12 +1,12 @@
 # Publicação do Zenit Hub no Render
 
-Configuração verificada em 29/09/2026. O serviço foi publicado em `https://zenit-hub.onrender.com`, no plano `0.5c-512mb` (US$ 7/mês), na região Oregon. A base `zenit_hub` está na versão 1, com sete tabelas incluindo o controle de migrações. O pre-deploy, `/health`, a ponte assinada com o Cash (`9ddc456`) e a autenticação do webhook foram validados no ambiente publicado. O callback WhatsApp do app Meta foi alterado para `https://zenit-hub.onrender.com/webhooks/whatsapp`; a Meta aceitou a verificação e a assinatura de `messages` foi preservada na versão v25.0. O piloto com mensagens reais é uma validação separada.
+Configuração atualizada em 30/09/2026. O serviço está publicado em `https://zenit-hub.onrender.com`, no plano `0.5c-512mb` (US$ 7/mês), na região Oregon. A base `zenit_hub` está na versão 2, incluindo `calendar_drafts`. O pre-deploy, `/health`, a ponte assinada com o Cash (`9ddc456`) e a autenticação do webhook foram validados no ambiente publicado. O callback WhatsApp do app Meta foi alterado para `https://zenit-hub.onrender.com/webhooks/whatsapp`; a Meta aceitou a verificação e a assinatura de `messages` foi preservada na versão v25.0.
 
-O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Day, Calendar e IA de consolidação ainda não têm credenciais configuradas; o fluxo Cash usa a IA já existente no Cash.
+O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Calendar e IA de consolidação estão configurados; o fluxo Cash mantém sua IA existente. O usuário confirmou o funcionamento da conexão Calendar e do teste de evento pelo WhatsApp. O Day ainda aguarda publicação da autorização web e cadastro OAuth; sua proteção de somente leitura já foi aplicada no Supabase.
 
 Existe também um callback específico da conta WhatsApp (WABA), que prevalece sobre o endereço geral do app. Ambos foram atualizados para o Hub. A consulta `GET /PHONE_NUMBER_ID?fields=webhook_configuration` confirmou os campos `application` e `whatsapp_business_account` com o endereço do Hub.
 
-O teste real de `conexões` passou após essa correção: uma entrada `done`, uma saída `sent`, menu Zenit Hub com os três botões e Cash conectado pelo vínculo existente. O usuário confirmou o recebimento. Isso valida o canal e a consulta de vínculo; consultas financeiras, áudio e confirmações por botão ainda devem passar pelo roteiro funcional em produção.
+O teste real de `conexões` passou após essa correção: uma entrada `done`, uma saída `sent`, menu Zenit Hub com os três botões e Cash conectado pelo vínculo existente. O usuário confirmou o recebimento e depois validou consultas financeiras e novos lançamentos. Áudio mantém a ponte existente com o Cash; perguntas ao Day e Calendar usam texto nesta versão.
 
 Para rollback do canal, restaure **nos dois níveis, app e WABA**, o callback anterior `https://zenit-esmn.onrender.com/api/webhooks/whatsapp`, usando o mesmo token de verificação já existente. O callback WABA é configurado por `POST /WABA_ID/subscribed_apps`, com `override_callback_uri` e `verify_token`, autenticado pelo token do próprio app. Preserve a base e a chave do Hub. O Cash mantém seu endpoint anterior ativo.
 
@@ -126,7 +126,7 @@ A migração 2 cria `calendar_drafts`, sem alterar dados das aplicações de ori
 
 O conector usa o Supabase já existente do Day. Ele não cria um novo banco para tarefas.
 
-1. Aplique no projeto Day a migração `20260929162635_hub_oauth_read_only.sql`, após as migrações anteriores. Ela impede escritas com tokens OAuth de terceiros. Não habilite o conector sem essa proteção.
+1. Aplique no projeto Day a migração `20260930171741_hub_oauth_read_only.sql`, após as migrações anteriores. Ela impede escritas com tokens OAuth de terceiros. Já foi aplicada e validada no projeto hospedado em 30/09/2026; a versão do arquivo local acompanha o histórico remoto. Não habilite o conector sem essa proteção.
 2. Publique o frontend web do Day em HTTPS com acesso a `/oauth/consent`. Se o Day estiver apenas em Tauri, essa página ainda precisará de hospedagem web; ela pode usar um **Static Site** separado no Render.
 3. No Supabase do Day, habilite **Authentication > OAuth Server**. Configure **Site URL** para a origem web do Day e **Authorization Path** como `/oauth/consent`. Mantenha registro dinâmico desabilitado no piloto.
 4. Registre o Hub como cliente **Confidential**, com autenticação `client_secret_basic` e callback exato `https://SEU_HUB/oauth/day/callback`.
