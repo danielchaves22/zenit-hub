@@ -4,7 +4,11 @@ Configuração verificada em 29/09/2026. O serviço foi publicado em `https://ze
 
 O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Day, Calendar e IA de consolidação ainda não têm credenciais configuradas; o fluxo Cash usa a IA já existente no Cash.
 
-Para rollback do canal, restaure na Meta o callback anterior `https://zenit-esmn.onrender.com/api/webhooks/whatsapp`, usando o mesmo token de verificação já existente. Preserve a base e a chave do Hub. O Cash mantém seu endpoint anterior ativo.
+Existe também um callback específico da conta WhatsApp (WABA), que prevalece sobre o endereço geral do app. Ambos foram atualizados para o Hub. A consulta `GET /PHONE_NUMBER_ID?fields=webhook_configuration` confirmou os campos `application` e `whatsapp_business_account` com o endereço do Hub.
+
+O teste real de `conexões` passou após essa correção: uma entrada `done`, uma saída `sent`, menu Zenit Hub com os três botões e Cash conectado pelo vínculo existente. O usuário confirmou o recebimento. Isso valida o canal e a consulta de vínculo; consultas financeiras, áudio e confirmações por botão ainda devem passar pelo roteiro funcional em produção.
+
+Para rollback do canal, restaure **nos dois níveis, app e WABA**, o callback anterior `https://zenit-esmn.onrender.com/api/webhooks/whatsapp`, usando o mesmo token de verificação já existente. O callback WABA é configurado por `POST /WABA_ID/subscribed_apps`, com `override_callback_uri` e `verify_token`, autenticado pelo token do próprio app. Preserve a base e a chave do Hub. O Cash mantém seu endpoint anterior ativo.
 
 ## Serviço e armazenamento
 
@@ -144,6 +148,7 @@ Você pode ativar os conectores gradualmente. Para deixar Day desabilitado, omit
 3. Configure os clientes OAuth e publique a tela de consentimento do Day. Confira que cada callback usa exatamente o mesmo domínio de `HUB_PUBLIC_URL`.
 4. Valide a nova rota com ambiente/número de teste e credenciais correspondentes. Se houver apenas o número atual, faça uma troca controlada e tenha o callback anterior disponível para retornar.
 5. Na configuração do webhook WhatsApp do app Meta, use `https://SEU_HUB/webhooks/whatsapp` e o valor de `WHATSAPP_WEBHOOK_VERIFY_TOKEN` do Hub; mantenha a assinatura do campo `messages`. Não altere callbacks de outros produtos do app Meta.
+   Confira também `webhook_configuration` do número. Se houver callback específico da conta (`whatsapp_business_account`) ou do número (`phone_number`), ele prevalece sobre o callback do app e também precisa apontar para o destino correto. Atualize somente a assinatura correspondente ao app/número em migração, sem remover as demais.
 6. Envie `conexões`; teste Cash, áudio, correção e botão revisado. Envie `conectar Day`/`conectar Calendar`; autorize no navegador e confirme a conta no WhatsApp. Teste consultas e desconexão.
 7. Reinicie o Hub em um momento sem operações pendentes e confira que as conexões persistem. Em falha do piloto, volte o callback ao Cash; preserve a base PostgreSQL e a chave do Hub.
 
