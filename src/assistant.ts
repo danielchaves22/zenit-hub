@@ -22,7 +22,7 @@ const definitions = {
   cash_assistant: tool('cash_assistant', 'Encaminha a mensagem ORIGINAL ao assistente Cash para registrar, revisar ou confirmar um lançamento, ou outras operações financeiras. Chame sozinha. A resposta e os botões do Cash são exibidos diretamente.', {}),
   day_subjects: tool('day_subjects', 'Consulta assuntos sincronizados do Day. Retomada (review_on) e prazo (due_on) são diferentes.', {
     status: { type: 'string', enum: ['pending', 'todo', 'doing', 'waiting', 'blocked', 'done'] },
-    dueBefore: { type: ['string', 'null'], description: 'Prazo máximo YYYY-MM-DD, ou null para qualquer prazo.' }, limit: { type: 'integer', minimum: 1, maximum: 50 }
+    dueBefore: { type: ['string', 'null'], description: 'Filtra due_on <= YYYY-MM-DD: data máxima INCLUSIVA, sem acrescentar um dia. null inclui qualquer prazo, inclusive assuntos sem prazo. Só filtre se o usuário limitar o prazo dos assuntos.' }, limit: { type: 'integer', minimum: 1, maximum: 50 }
   }),
   calendar_events: tool('calendar_events', 'Consulta eventos de uma agenda. Usa intervalo com início inclusivo e fim exclusivo, ambos ISO com fuso.', {
     start: { type: 'string' }, end: { type: 'string' }, calendarId: { type: 'string', description: 'primary ou ID obtido com calendar_list.' },

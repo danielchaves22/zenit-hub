@@ -2,7 +2,7 @@
 
 Configuração atualizada em 30/09/2026. O serviço está publicado em `https://zenit-hub.onrender.com`, no plano `0.5c-512mb` (US$ 7/mês), na região Oregon. A base `zenit_hub` está na versão 2, incluindo `calendar_drafts`. O pre-deploy, `/health`, a ponte assinada com o Cash (`9ddc456`) e a autenticação do webhook foram validados no ambiente publicado. O callback WhatsApp do app Meta foi alterado para `https://zenit-hub.onrender.com/webhooks/whatsapp`; a Meta aceitou a verificação e a assinatura de `messages` foi preservada na versão v25.0.
 
-O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Calendar e IA de consolidação estão configurados; o fluxo Cash mantém sua IA existente. O usuário confirmou o funcionamento da conexão Calendar e do teste de evento pelo WhatsApp. O Day ainda aguarda publicação da autorização web e cadastro OAuth; sua proteção de somente leitura já foi aplicada no Supabase.
+O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Calendar e IA de consolidação estão configurados; o fluxo Cash mantém sua IA existente. O usuário confirmou o funcionamento da conexão Calendar e do teste de evento pelo WhatsApp. A página de autorização do Day está publicada, o cliente OAuth foi cadastrado e as quatro variáveis do conector foram salvas no Hub. A proteção de somente leitura foi aplicada e testada no Supabase; a conexão pessoal do Day ainda aguarda validação pelo WhatsApp.
 
 Existe também um callback específico da conta WhatsApp (WABA), que prevalece sobre o endereço geral do app. Ambos foram atualizados para o Hub. A consulta `GET /PHONE_NUMBER_ID?fields=webhook_configuration` confirmou os campos `application` e `whatsapp_business_account` com o endereço do Hub.
 
@@ -140,7 +140,7 @@ O conector usa o Supabase já existente do Day. Ele não cria um novo banco para
 | `DAY_CLIENT_ID` | Client ID do Hub registrado no OAuth Server do Day |
 | `DAY_CLIENT_SECRET` | Secret desse cliente confidencial, somente no backend Hub |
 
-Para um Static Site do Day: build `npm ci && npm run build`, diretório publicado `dist`, e rewrite `/*` → `/index.html` para servir `/oauth/consent`. Confirme que as variáveis públicas foram definidas **no build** desse site. Os detalhes de autorização e validação estão em `zenit-day/docs/ZENIT_HUB.md`.
+O Static Site do Day está em `https://zenit-day.onrender.com` (`srv-dauke459fdbs739acepg`): build `npm ci --include=dev && npm run build`, diretório publicado `dist`, rewrite `/oauth/consent` → `/index.html` e cabeçalho `Referrer-Policy: no-referrer` em `/*`. Usa Node 22, `SKIP_INSTALL_DEPS=true` e auto-deploy desabilitado. As variáveis públicas foram definidas **no build** desse site. O cliente OAuth confidencial usa `client_secret_basic`, callback exato `https://zenit-hub.onrender.com/oauth/day/callback` e registro dinâmico desabilitado. Os detalhes de autorização e validação estão em `zenit-day/docs/ZENIT_HUB.md`.
 
 Você pode ativar os conectores gradualmente. Para deixar Day desabilitado, omita suas quatro variáveis, em vez de cadastrar URLs/chaves fictícias. O mesmo vale para as credenciais Google e de IA.
 

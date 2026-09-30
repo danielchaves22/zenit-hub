@@ -69,10 +69,11 @@ test('Day filters owner, archive and status; overfull results are explicitly tru
       assert.equal(parsed.searchParams.get('user_id'), 'eq.alice-account');
       assert.equal(parsed.searchParams.get('archived'), 'eq.false');
       assert.equal(parsed.searchParams.get('status'), 'neq.done');
+      assert.equal(parsed.searchParams.get('due_on'), 'lte.2026-10-01');
       assert.equal((init?.headers as any).Authorization, 'Bearer provider-secret');
       return new Response(JSON.stringify([{ title: 'A' }, { title: 'B' }]));
     }) as typeof fetch);
-    const result = await day.subjects('alice', { status: 'pending', dueBefore: null, limit: 1 });
+    const result = await day.subjects('alice', { status: 'pending', dueBefore: '2026-10-01', limit: 1 });
     assert(result.truncated); assert.equal(result.subjects.length, 1);
     await assert.rejects(day.subjects('bob', { status: 'pending', dueBefore: null, limit: 1 }));
   } finally { (await store.close()); }
