@@ -6,7 +6,7 @@ O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de
 
 Existe também um callback específico da conta WhatsApp (WABA), que prevalece sobre o endereço geral do app. Ambos foram atualizados para o Hub. A consulta `GET /PHONE_NUMBER_ID?fields=webhook_configuration` confirmou os campos `application` e `whatsapp_business_account` com o endereço do Hub.
 
-O teste real de `conexões` passou após essa correção: uma entrada `done`, uma saída `sent`, menu Zenit Hub com os três botões e Cash conectado pelo vínculo existente. O usuário confirmou o recebimento e depois validou consultas financeiras e novos lançamentos. Áudio mantém a ponte existente com o Cash; perguntas ao Day e Calendar usam texto nesta versão.
+O teste real de `conexões` passou após essa correção: uma entrada `done`, uma saída `sent`, menu Zenit Hub com os três botões e Cash conectado pelo vínculo existente. O usuário confirmou o recebimento e depois validou consultas financeiras e novos lançamentos. O Hub agora transcreve áudios antes de selecionar o conector; voz e texto usam o mesmo contexto e as mesmas capacidades.
 
 Para rollback do canal, restaure **nos dois níveis, app e WABA**, o callback anterior `https://zenit-esmn.onrender.com/api/webhooks/whatsapp`, usando o mesmo token de verificação já existente. O callback WABA é configurado por `POST /WABA_ID/subscribed_apps`, com `override_callback_uri` e `verify_token`, autenticado pelo token do próprio app. Preserve a base e a chave do Hub. O Cash mantém seu endpoint anterior ativo.
 
@@ -105,7 +105,9 @@ O código aceita apenas HTTPS para um backend Cash remoto. Portanto, nesta vers�
 | `OPENAI_MODEL` | ID explícito de um modelo disponível na sua conta, compatível com Responses API e function calling |
 | `OPENAI_REASONING_EFFORT` | Opcional, deve ser suportado pelo modelo; `none` preserva a configuração econômica do Cash com `gpt-6-luna` |
 
-Essas variáveis habilitam interpretação e consolidação no Hub. Com somente Cash conectado, mensagens financeiras usam o assistente do Cash. Áudios continuam usando as credenciais/modelo de transcrição configurados no Cash. O Hub não importa automaticamente as configurações de IA armazenadas no Cash.
+Essas variáveis habilitam interpretação e consolidação no Hub. Com somente Cash conectado, mensagens financeiras usam o assistente do Cash. Para áudio, configure também `WHATSAPP_TRANSCRIPTION_MODEL` (opcional, padrão `gpt-transcribe`). A transcrição usa `OPENAI_API_KEY` e as credenciais Meta **do Hub**; a chave precisa ter acesso ao endpoint de transcrição. O Hub não importa automaticamente as configurações de IA armazenadas no Cash. Não há migração de banco nem alteração no webhook para ativar esse fluxo. Referência: [transcrição de arquivos na OpenAI](https://developers.openai.com/api/docs/guides/speech-to-text).
+
+Após publicar, teste uma pergunta de agenda por áudio, um complemento por voz e uma continuação digitada. Teste também áudio com apenas Day ou Calendar conectado, rascunho financeiro e correção por voz, e preparação de evento seguida de confirmação **pelo botão**. Uma falha de transcrição deve orientar nova tentativa/texto sem encaminhar a mensagem ao Cash nem executar operações. Nunca reenvie automaticamente áudios antigos para validar uma implantação.
 
 ### Google Calendar
 

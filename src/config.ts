@@ -32,6 +32,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
     cash: { url: optionalOrigin('CASH_API_URL'), secret: env.CASH_HUB_SHARED_SECRET || '',
       bindingPrefix: env.CASH_BINDING_PREFIX || 'VINCULAR ZENIT', connectUrl: env.CASH_CONNECT_URL || '' },
     ai: { key: env.OPENAI_API_KEY || '', model: env.OPENAI_MODEL || '',
+      transcriptionModel: env.WHATSAPP_TRANSCRIPTION_MODEL?.trim() || 'gpt-transcribe',
       effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional().parse(env.OPENAI_REASONING_EFFORT || undefined) },
     google: { clientId: env.GOOGLE_CLIENT_ID || '', secret: env.GOOGLE_CLIENT_SECRET || '' },
     day: { url: dayUrl, siteUrl: optionalOrigin('DAY_SITE_URL'), key: dayKey, clientId: env.DAY_CLIENT_ID || '', secret: env.DAY_CLIENT_SECRET || '' }

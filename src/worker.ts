@@ -20,7 +20,7 @@ export class Worker {
       try {
         const replies = message.text || message.button || message.audio
           ? await this.whatsapp.withTypingIndicator(message.id, () => this.assistant.handle(message))
-          : [{ text: 'Envie texto para consultar suas conexões ou uma mensagem de voz para falar com o Cash.' }];
+          : [{ text: 'Envie texto ou uma mensagem de voz para consultar suas conexões.' }];
         await this.store.complete(message, replies);
       } catch (error) {
         await this.store.fail(message.id);

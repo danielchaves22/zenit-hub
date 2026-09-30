@@ -7,6 +7,7 @@ import { Calendar } from './connectors/calendar.js';
 import { eventChange } from './connectors/calendar-writes.js';
 import { CalendarTimingError, checkCalendarTiming } from './calendar-evidence.js';
 import { jsonRequest } from './http.js';
+import { AudioTranscriber } from './audio.js';
 import { PublicError, type Fetch, type Incoming, type Provider, type Reply } from './types.js';
 
 function tool(name: string, description: string, properties: Record<string, unknown>) {
@@ -47,24 +48,24 @@ const definitions = {
 
 export class Assistant {
   constructor(readonly config: Config, readonly store: Store, readonly oauth: OAuth, readonly cash: Cash,
-    readonly day: Day, readonly calendar: Calendar, private fetcher: Fetch = fetch) {}
+    readonly day: Day, readonly calendar: Calendar, private fetcher: Fetch = fetch,
+    private audio: Pick<AudioTranscriber, 'transcribe'> = new AudioTranscriber(config)) {}
 
   private async cashMessage(message: Incoming) {
     const replies = await this.cash.message(message);
-    // Retain the visible reply so a later typed correction can be routed back
-    // to the same Cash conversation, even when the original request was voice.
-    await this.store.addHistory(message.sender, 'user', message.audio ? '[Mensagem de voz encaminhada ao Cash]' : message.text || '[Resposta pelo botão do Cash]');
+    // Voice has already become text, so both formats share the same context.
+    await this.store.addHistory(message.sender, 'user', message.text || '[Resposta pelo botão do Cash]');
     await this.store.addHistory(message.sender, 'assistant', replies.map(r => r.text).join('\n'));
     return replies;
   }
 
   async handle(message: Incoming): Promise<Reply[]> {
-    // Voice currently belongs to Cash: it owns transcription credentials,
-    // account vocabulary, draft revisions, and the button-only confirmation rule.
+    // Normalize once before commands, routing and history. Never fabricate a
+    // button from speech or forward the media for a second transcription.
     if (message.audio) {
       if (message.text.trim() || message.button !== undefined) throw new PublicError('Envie o áudio separadamente de textos e botões.');
-      if (await this.store.cashDisabled(message.sender)) throw new PublicError('Conecte o Cash novamente para enviar mensagens de voz. Para Day e Calendar, envie texto.');
-      return this.cashMessage(message);
+      const text = await this.audio.transcribe(message.audio.mediaId);
+      message = { id: message.id, sender: message.sender, timestamp: message.timestamp, text };
     }
     const normalized = message.text.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.!?]+$/, '');
     const command = message.button?.startsWith('hub:connect:') ? `conectar ${message.button.split(':')[2]}` : normalized;
@@ -129,6 +130,8 @@ export class Assistant {
     const now = new Intl.DateTimeFormat('sv-SE', { timeZone: this.config.timeZone, dateStyle: 'short', timeStyle: 'short' }).format(new Date());
     const instructions = `Você é o Zenit Hub. Responda em português, de forma breve. Data e hora LOCAIS do usuário: ${now}. Fuso: ${this.config.timeZone}. Resolva hoje/amanhã a partir dessa data local.
 Use somente as ferramentas disponíveis para dados pessoais. Não invente resultados, contas ou confirmações.
+Texto digitado e fala transcrita têm o mesmo significado e usam as mesmas conexões. As ferramentas disponíveis nesta solicitação definem suas capacidades atuais; uma resposta antiga do assistente financeiro não limita o Hub.
+Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Contas, pagamentos e vencimentos financeiros referem-se ao Cash; assuntos, tarefas e próximos passos referem-se ao Day. Se a intenção continuar ambígua, pergunte. Use o histórico para resolver complementos como "estou falando da agenda", preservando o período solicitado.
 Cash mantém cálculos e permissões financeiras. Day só permite leitura. Calendar permite consultar, criar, alterar e excluir eventos comuns; escritas SEMPRE geram uma prévia e dependem do botão de confirmação. Texto "sim" ou "confirmar" não autoriza gravação; oriente usar o botão.
 Para alterar ou excluir, consulte os eventos na mesma solicitação, identifique título/data/agenda sem ambiguidades e use o ID retornado. Nunca invente IDs nem escolha arbitrariamente entre eventos semelhantes. Não diga que gravou sem resultado da API.
 calendar_prepare deve ser chamada sozinha, para um evento por vez. Ao criar ou mudar horários, obtenha início e fim claros e inclua o ano e offset do fuso; não invente duração. Para dia inteiro, end é o dia seguinte ao último dia incluído. null preserva campos na edição; para exclusão todos os campos de conteúdo são null.

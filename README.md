@@ -5,7 +5,7 @@ Backend pessoal de conexões para conversar com Cash, Day e Google Calendar pelo
 ## Versão 0.1
 
 - Entrada única pela WhatsApp Cloud API, validada por assinatura e identificação do número de destino.
-- Cash: preserva QR Code, vínculo existente, assistente financeiro, mensagens de voz e confirmações por botão. Com somente Cash conectado, o texto vai diretamente ao assistente atual; áudios e `cash: ...` seguem esse caminho mesmo com outras conexões, sem uma chamada adicional de IA no Hub.
+- Cash: preserva QR Code, vínculo existente, assistente financeiro e confirmações por botão. O Hub transcreve áudios antes de escolher o serviço, usando o mesmo fluxo e histórico das mensagens digitadas. Com somente Cash conectado, o texto (digitado ou transcrito) vai diretamente ao assistente atual; `cash: ...` também força esse destino.
 - Day e Calendar: autorização pelo navegador, seguida de confirmação da conta na conversa que originou o pedido. Contas independentes, sem SSO ou senha própria do Hub.
 - Consultas consolidadas por ferramentas. Day permanece somente leitura; Calendar permite consulta, criação, alteração e exclusão de eventos, sempre com prévia e confirmação por botão. Alterações financeiras seguem o fluxo existente do Cash.
 - PostgreSQL com credenciais e conteúdo de mensagens cifrados por AES-256-GCM; contexto limitado a 12 mensagens por pessoa e 24 horas.
@@ -49,11 +49,13 @@ A ponte é uma integração interna de primeira parte, com assinatura HMAC, time
 
 O registro de mensagens já existente no Cash é reutilizado, sem nova migração. Os endpoints e o assistente web/mobile continuam disponíveis. A compatibilidade inicial da ponte Cash usa remetentes numéricos do fluxo existente; suportar outros identificadores do WhatsApp requer evoluir também o vínculo do Cash.
 
-Mensagens de voz seguem para o Cash como uma referência de mídia assinada. O Cash valida o vínculo e as permissões antes de baixar/transcrever, usando as credenciais Meta e OpenAI já cadastradas. Mantenha no Cash o acesso Meta ao mesmo número atendido pelo Hub, mesmo após mudar o webhook. O Hub não baixa nem transcreve a mídia. O texto da resposta visível entra no contexto curto para orientar uma correção posterior por texto, sem fornecer ao modelo de consolidação a referência ou o arquivo de áudio. Day, Calendar e comandos de conexão continuam por texto nesta versão.
+Mensagens de voz são baixadas e transcritas **no Hub**, usando `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `OPENAI_API_KEY` e `WHATSAPP_TRANSCRIPTION_MODEL` (padrão `gpt-transcribe`) do Hub. O contexto da transcrição é neutro, sem presumir um domínio financeiro. Depois da transcrição, o mesmo fluxo usado para texto escolhe Cash, Day ou Calendar e trata comandos de conexão. Áudio para Day/Calendar funciona sem vínculo Cash. Somente pedidos financeiros chegam ao Cash, como texto, com o mesmo remetente e ID da mensagem; não há segunda transcrição.
+
+O Hub aceita até 16 MB, valida tipo, tamanho, hash quando fornecido e destino HTTPS da mídia Meta, bloqueando redirecionamentos. O arquivo fica apenas em memória. A fila mantém a referência cifrada; o texto transcrito e a resposta entram no histórico curto cifrado (até 12 mensagens e 24 horas), permitindo continuar por voz ou texto sem perder datas e outros detalhes. O modelo de interpretação não recebe URLs de mídia nem credenciais. A transcrição limita cada pedido a 6.000 caracteres e falha antes de chamar qualquer aplicação quando não consegue processar a fala.
 
 O Hub assume o envio das respostas e do indicador de digitação. Correções usam a sessão e o rascunho existentes do Cash. Somente o botão Confirmar atual grava um lançamento; texto, voz e botões de revisões anteriores não confirmam. Falhas de transcrição retornam orientação sem executar uma operação financeira. A fila persiste a referência cifrada, sem guardar o arquivo de áudio.
 
-A ponte aguarda até 240 segundos para mensagens (download, transcrição e assistente), sem repetir automaticamente uma chamada cujo resultado seja incerto. Configure o proxy do Cash para comportar essa duração e permita até 300 segundos para encerramento do Hub durante uma atualização. Consultas curtas continuam com limite de 45 segundos.
+A ponte aguarda até 240 segundos para respostas do assistente Cash, sem repetir automaticamente uma chamada cujo resultado seja incerto. Configure o proxy do Cash para comportar essa duração e permita até 300 segundos para encerramento do Hub durante uma atualização. No Hub, os limites são 15 segundos para metadados de mídia, 30 para download e 60 para transcrição, sem repetição automática. Consultas curtas continuam com limite de 45 segundos.
 
 ### Day
 
@@ -91,7 +93,7 @@ No piloto, configure `HUB_ALLOWED_SENDERS` com os identificadores permitidos. De
 - `cash: ...`: encaminha explicitamente ao assistente financeiro.
 - Perguntas como “Quais contas vencem nesta semana?”, “Quais tarefas estão pendentes?” e “Tenho compromissos amanhã?” usam as conexões autorizadas.
 - “Crie Show Crossroads em 23/12/2026 das 14h às 17h”, “Mude o Show Crossroads de 23/12/2026 para 15h às 18h” ou “Exclua esse compromisso” geram uma prévia; só o botão grava na agenda.
-- Áudio: inicia ou corrige pedidos financeiros no Cash. Respostas e confirmação continuam por texto/botões; perguntas ao Day e Calendar devem ser digitadas.
+- Áudio: consulta Day e Calendar, prepara eventos e inicia/corrige pedidos financeiros no Cash. Compartilha o contexto com mensagens digitadas. Respostas e confirmação continuam por texto/botões.
 
 ## Migração e operação
 
