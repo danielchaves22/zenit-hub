@@ -98,12 +98,12 @@ test('Calendar preview is returned directly and confirmation buttons execute wit
     const oauth = new OAuth(config, store); let modelCalls = 0; let preparations = 0; let confirmations = 0;
     const preview = { text: 'Prévia da agenda', buttons: [{ id: `hub:calendar:confirm:${'a'.repeat(43)}`, title: 'Confirmar' }] };
     const args = { operation: 'create', calendarId: 'primary', eventId: null, title: 'Show', description: null, location: null,
-      start: '2026-12-23T14:00:00-03:00', end: '2026-12-23T17:00:00-03:00', allDay: false, reminderMinutes: null };
+      start: '2026-12-23T14:00:00-03:00', end: '2026-12-23T17:00:00-03:00', allDay: false, reminderMinutes: null, timingEvidence: 'das 14h às 17h' };
     const assistant = new Assistant(config, store, oauth, { connected: async () => false } as any, {} as any,
       { prepare: async (sender: string, input: unknown) => { assert.equal(sender, 'alice'); assert.deepEqual(input, args); preparations++; return preview; },
         confirm: async (sender: string, token: string, approved: boolean) => { assert.equal(sender, 'alice'); assert.equal(token, 'a'.repeat(43)); assert(approved); confirmations++; return { text: 'Evento criado.' }; } } as any,
       (async () => { modelCalls++; return new Response(JSON.stringify({ output: [{ type: 'function_call', name: 'calendar_prepare', call_id: '1', arguments: JSON.stringify(args) }] })); }) as typeof fetch);
-    assert.deepEqual(await assistant.handle({ ...message, text: 'Crie o Show' }), [preview]);
+    assert.deepEqual(await assistant.handle({ ...message, text: 'Crie o Show das 14h às 17h' }), [preview]);
     assert.equal(preparations, 1); assert.equal(modelCalls, 1); assert.equal(confirmations, 0);
     assert.deepEqual(await assistant.handle({ ...message, text: '', button: preview.buttons[0].id }), [{ text: 'Evento criado.' }]);
     assert.equal(confirmations, 1); assert.equal(modelCalls, 1);
@@ -115,7 +115,7 @@ test('Calendar mutation IDs must come from a read in the current request and unc
   try {
     const oauth = new OAuth(config, store); let calls = 0; let preparations = 0;
     const args = { operation: 'delete', calendarId: 'primary', eventId: 'invented', title: null, description: null, location: null,
-      start: null, end: null, allDay: null, reminderMinutes: null };
+      start: null, end: null, allDay: null, reminderMinutes: null, timingEvidence: null };
     const assistant = new Assistant(config, store, oauth, { connected: async () => false } as any, {} as any,
       { prepare: async () => { preparations++; throw new Error('must not be called'); } } as any,
       (async (_url, init) => {

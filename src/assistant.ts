@@ -5,6 +5,7 @@ import { Cash } from './connectors/cash.js';
 import { Day } from './connectors/day.js';
 import { Calendar } from './connectors/calendar.js';
 import { eventChange } from './connectors/calendar-writes.js';
+import { CalendarTimingError, checkCalendarTiming } from './calendar-evidence.js';
 import { jsonRequest } from './http.js';
 import { PublicError, type Fetch, type Incoming, type Provider, type Reply } from './types.js';
 
@@ -38,6 +39,7 @@ const definitions = {
     start: { type: ['string', 'null'], description: 'ISO com offset; para dia inteiro YYYY-MM-DD. Ao editar horário, forneça início, fim e allDay juntos.' },
     end: { type: ['string', 'null'], description: 'Fim exclusivo. ISO com offset, ou YYYY-MM-DD se dia inteiro.' },
     allDay: { type: ['boolean', 'null'] },
+    timingEvidence: { type: ['string', 'null'], description: 'Citação EXATA de uma mensagem do usuário com início e fim explícitos, ou "dia inteiro". Obrigatória ao criar ou mudar horários; null nas outras operações. Se faltar horário, pergunte antes de chamar esta ferramenta.' },
     reminderMinutes: { type: ['array', 'null'], items: { type: 'integer', minimum: 0, maximum: 40320 }, maxItems: 5,
       description: 'Notificações do Google em minutos antes. null preserva/padrão; [] desativa. Para excluir, todos os campos além de operation/calendarId/eventId devem ser null.' }
   })
@@ -121,8 +123,11 @@ export class Assistant {
 
     const enabled = [ ...(cashConnected ? ['cash_overview', 'cash_due', 'cash_assistant'] : []),
       ...(dayConnected ? ['day_subjects'] : []), ...(calendarConnected ? ['calendar_events', 'calendar_list', 'calendar_prepare'] : []) ] as (keyof typeof definitions)[];
-    const input: any[] = [...await this.store.history(message.sender), { role: 'user', content: message.text }];
-    const instructions = `Você é o Zenit Hub. Responda em português, de forma breve. Agora: ${new Date().toISOString()}. Fuso do usuário: ${this.config.timeZone}.
+    const history = await this.store.history(message.sender);
+    const input: any[] = [...history, { role: 'user', content: message.text }];
+    const userMessages = [...history.filter(item => item.role === 'user').map(item => item.content), message.text];
+    const now = new Intl.DateTimeFormat('sv-SE', { timeZone: this.config.timeZone, dateStyle: 'short', timeStyle: 'short' }).format(new Date());
+    const instructions = `Você é o Zenit Hub. Responda em português, de forma breve. Data e hora LOCAIS do usuário: ${now}. Fuso: ${this.config.timeZone}. Resolva hoje/amanhã a partir dessa data local.
 Use somente as ferramentas disponíveis para dados pessoais. Não invente resultados, contas ou confirmações.
 Cash mantém cálculos e permissões financeiras. Day só permite leitura. Calendar permite consultar, criar, alterar e excluir eventos comuns; escritas SEMPRE geram uma prévia e dependem do botão de confirmação. Texto "sim" ou "confirmar" não autoriza gravação; oriente usar o botão.
 Para alterar ou excluir, consulte os eventos na mesma solicitação, identifique título/data/agenda sem ambiguidades e use o ID retornado. Nunca invente IDs nem escolha arbitrariamente entre eventos semelhantes. Não diga que gravou sem resultado da API.
@@ -170,6 +175,7 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
             case 'calendar_prepare': {
               if (requested.length !== 1) throw new PublicError('Envie uma operação de agenda por vez para revisar a confirmação.');
               const change = eventChange.parse(args);
+              checkCalendarTiming(change, userMessages, this.config.timeZone);
               if (!calendarsSeen.has(change.calendarId)) throw new PublicError('Consulte calendar_list para identificar a agenda.');
               if (change.operation !== 'create' && !eventsSeen.has(JSON.stringify([change.calendarId, change.eventId]))) {
                 throw new PublicError('Consulte calendar_events e identifique o evento nesta solicitação antes de editar ou excluir.');
@@ -186,7 +192,14 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
             const list = result as { calendar: string; events: { id: string }[] };
             for (const entry of list.events) eventsSeen.add(JSON.stringify([list.calendar, entry.id]));
           }
-        } catch (error) { result = { error: error instanceof PublicError ? error.message : 'Parâmetros inválidos ou consulta não concluída.' }; }
+        } catch (error) {
+          if (error instanceof CalendarTimingError) {
+            await this.store.addHistory(message.sender, 'user', message.text);
+            await this.store.addHistory(message.sender, 'assistant', error.message);
+            return [{ text: error.message }];
+          }
+          result = { error: error instanceof PublicError ? error.message : 'Parâmetros inválidos ou consulta não concluída.' };
+        }
         const serialized = JSON.stringify(result);
         input.push({ type: 'function_call_output', call_id: item.call_id,
           output: serialized.length > 24_000 ? JSON.stringify({ error: 'Resposta muito grande. Reduza o limite ou o período.' }) : serialized });

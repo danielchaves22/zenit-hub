@@ -13,7 +13,7 @@ const config = readConfig({ DATABASE_URL: 'postgresql://localhost/zenit_hub_test
 const connection: Connection = { sender: 'alice', provider: 'calendar', accountId: 'google-alice', label: 'alice@example.com',
   tokens: { access_token: 'private-access', refresh_token: 'private-refresh', expires_at: Date.now() + 3600000, scope: googleScopes.join(' ') } };
 const create = { operation: 'create', calendarId: 'primary', eventId: null, title: 'Show Crossroads', description: null, location: null,
-  start: '2026-12-23T14:00:00-03:00', end: '2026-12-23T17:00:00-03:00', allDay: false, reminderMinutes: null };
+  start: '2026-12-23T14:00:00-03:00', end: '2026-12-23T17:00:00-03:00', allDay: false, reminderMinutes: null, timingEvidence: 'das 14h às 17h' };
 const update = { ...create, operation: 'update', eventId: 'event123', title: 'Novo título', start: null, end: null, allDay: null };
 const remove = { ...update, operation: 'delete', title: null };
 const token = (r: Reply) => r.buttons![0].id.split(':')[3];

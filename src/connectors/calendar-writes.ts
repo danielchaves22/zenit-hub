@@ -10,6 +10,7 @@ export const eventChange = z.object({
   eventId: z.string().regex(/^[a-zA-Z0-9_-]{5,1024}$/).nullable(), title: z.string().trim().min(1).max(300).nullable(),
   description: z.string().max(2000).nullable(), location: z.string().max(500).nullable(),
   start: z.string().max(40).nullable(), end: z.string().max(40).nullable(), allDay: z.boolean().nullable(),
+  timingEvidence: z.string().max(1000).nullable(),
   reminderMinutes: z.array(z.number().int().min(0).max(40320)).max(5).nullable()
 }).strict();
 type EventTime = { date?: string | null; dateTime?: string | null; timeZone?: string | null };
