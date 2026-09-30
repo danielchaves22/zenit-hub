@@ -26,7 +26,9 @@ const definitions = {
     dueBefore: { type: ['string', 'null'], description: 'Filtra due_on <= YYYY-MM-DD: data máxima INCLUSIVA, sem acrescentar um dia. null inclui qualquer prazo, inclusive assuntos sem prazo. Só filtre se o usuário limitar o prazo dos assuntos.' }, limit: { type: 'integer', minimum: 1, maximum: 50 }
   }),
   calendar_events: tool('calendar_events', 'Consulta eventos de uma agenda. Usa intervalo com início inclusivo e fim exclusivo, ambos ISO com fuso.', {
-    start: { type: 'string' }, end: { type: 'string' }, calendarId: { type: 'string', description: 'primary ou ID obtido com calendar_list.' },
+    start: { type: 'string', description: 'Início INCLUSIVO em ISO com offset. Para fim de semana, sábado às 00:00.' },
+    end: { type: 'string', description: 'Limite EXCLUSIVO em ISO com offset. Para sábado e domingo inteiros, segunda-feira às 00:00, nunca terça. Não acrescente outro dia a um limite que já é exclusivo.' },
+    calendarId: { type: 'string', description: 'primary ou ID obtido com calendar_list.' },
     limit: { type: 'integer', minimum: 1, maximum: 50 }
   }),
   calendar_list: tool('calendar_list', 'Lista agendas autorizadas, permissões e seus IDs.', {}),
@@ -51,6 +53,16 @@ export class Assistant {
     readonly day: Day, readonly calendar: Calendar, private fetcher: Fetch = fetch,
     private audio: Pick<AudioTranscriber, 'transcribe'> = new AudioTranscriber(config)) {}
 
+  private async connections(sender: string) {
+    let cashConnected = false; let cashUnavailable = false;
+    if (!await this.store.cashDisabled(sender)) {
+      try { cashConnected = await this.cash.connected(sender); } catch { cashUnavailable = true; }
+    }
+    return { cashConnected, cashUnavailable,
+      dayConnected: Boolean(await this.store.connection(sender, 'day')),
+      calendarConnected: Boolean(await this.store.connection(sender, 'calendar')) };
+  }
+
   private async cashMessage(message: Incoming) {
     const replies = await this.cash.message(message);
     // Voice has already become text, so both formats share the same context.
@@ -60,10 +72,16 @@ export class Assistant {
   }
 
   async handle(message: Incoming): Promise<Reply[]> {
+    let connections: Awaited<ReturnType<Assistant['connections']>> | undefined;
     // Normalize once before commands, routing and history. Never fabricate a
     // button from speech or forward the media for a second transcription.
     if (message.audio) {
       if (message.text.trim() || message.button !== undefined) throw new PublicError('Envie o áudio separadamente de textos e botões.');
+      connections = await this.connections(message.sender);
+      if (!connections.cashConnected && !connections.dayConnected && !connections.calendarConnected) {
+        return [{ text: connections.cashUnavailable ? 'Não consegui verificar sua conexão agora. Tente novamente mais tarde ou envie "conexões" por texto.'
+          : 'Envie "conexões" por texto para conectar Cash, Day ou Calendar antes de usar mensagens de voz.' }];
+      }
       const text = await this.audio.transcribe(message.audio.mediaId);
       message = { id: message.id, sender: message.sender, timestamp: message.timestamp, text };
     }
@@ -104,12 +122,7 @@ export class Assistant {
     }
     if (message.button) throw new PublicError('Esse botão não está disponível. Envie "conexões" para continuar.');
 
-    let cashConnected = false; let cashUnavailable = false;
-    if (!await this.store.cashDisabled(message.sender)) {
-      try { cashConnected = await this.cash.connected(message.sender); } catch { cashUnavailable = true; }
-    }
-    const dayConnected = Boolean(await this.store.connection(message.sender, 'day'));
-    const calendarConnected = Boolean(await this.store.connection(message.sender, 'calendar'));
+    const { cashConnected, cashUnavailable, dayConnected, calendarConnected } = connections || await this.connections(message.sender);
     if (['oi', 'ola', 'ajuda', 'menu', 'conectar', 'conexoes', 'minhas conexoes', '/start'].includes(command)) {
       const status = (connected: boolean) => connected ? 'conectado' : 'não conectado';
       return [{ text: `Zenit Hub\nCash: ${cashUnavailable ? 'indisponível no momento' : status(cashConnected)}\nDay: ${status(dayConnected)}\nCalendar: ${status(calendarConnected)}\n\nEscolha uma conexão ou faça sua pergunta. Para remover uma conexão, envie "desconectar Day", "desconectar Calendar" ou "desconectar Cash".`,
@@ -132,6 +145,7 @@ export class Assistant {
 Use somente as ferramentas disponíveis para dados pessoais. Não invente resultados, contas ou confirmações.
 Texto digitado e fala transcrita têm o mesmo significado e usam as mesmas conexões. As ferramentas disponíveis nesta solicitação definem suas capacidades atuais; uma resposta antiga do assistente financeiro não limita o Hub.
 Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Contas, pagamentos e vencimentos financeiros referem-se ao Cash; assuntos, tarefas e próximos passos referem-se ao Day. Se a intenção continuar ambígua, pergunte. Use o histórico para resolver complementos como "estou falando da agenda", preservando o período solicitado.
+Para consultar um fim de semana, o padrão é sábado e domingo: de sábado às 00:00 até segunda-feira às 00:00 EXCLUSIVA no fuso do usuário. Só inclua sexta ou segunda se o usuário pedir. Confira que os limites da ferramenta correspondem aos dias descritos na resposta.
 Cash mantém cálculos e permissões financeiras. Day só permite leitura. Calendar permite consultar, criar, alterar e excluir eventos comuns; escritas SEMPRE geram uma prévia e dependem do botão de confirmação. Texto "sim" ou "confirmar" não autoriza gravação; oriente usar o botão.
 Para alterar ou excluir, consulte os eventos na mesma solicitação, identifique título/data/agenda sem ambiguidades e use o ID retornado. Nunca invente IDs nem escolha arbitrariamente entre eventos semelhantes. Não diga que gravou sem resultado da API.
 calendar_prepare deve ser chamada sozinha, para um evento por vez. Ao criar ou mudar horários, obtenha início e fim claros e inclua o ano e offset do fuso; não invente duração. Para dia inteiro, end é o dia seguinte ao último dia incluído. null preserva campos na edição; para exclusão todos os campos de conteúdo são null.

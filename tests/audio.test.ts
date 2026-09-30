@@ -103,6 +103,18 @@ test('typing failures do not prevent processing or leak credentials', async () =
   assert.equal(calls, 1);
 });
 
+test('unconnected senders cannot trigger a paid transcription; linking guidance remains available', async () => {
+  const store = await createTestStore(config.key);
+  try {
+    const assistant = new Assistant(config, store, new OAuth(config, store), { connected: async () => false } as any, {} as any, {} as any,
+      (async () => { throw new Error('model must not be called'); }) as typeof fetch,
+      { transcribe: async () => { throw new Error('transcription must not be called'); } });
+    const reply = await assistant.handle({ id: 'unknown', sender, timestamp: Date.now() / 1000, text: '', audio: { mediaId: '123' } });
+    assert.match(reply[0].text, /conexões.*por texto/);
+    assert.deepEqual(await store.history(sender), []);
+  } finally { await store.close(); }
+});
+
 test('voice and typed corrections share the original transcript and Cash draft without retranscription in Cash', async () => {
   const store = (await createTestStore(config.key));
   try {

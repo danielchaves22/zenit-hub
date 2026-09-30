@@ -53,6 +53,8 @@ Mensagens de voz são baixadas e transcritas **no Hub**, usando `WHATSAPP_ACCESS
 
 O Hub aceita até 16 MB, valida tipo, tamanho, hash quando fornecido e destino HTTPS da mídia Meta, bloqueando redirecionamentos. O arquivo fica apenas em memória. A fila mantém a referência cifrada; o texto transcrito e a resposta entram no histórico curto cifrado (até 12 mensagens e 24 horas), permitindo continuar por voz ou texto sem perder datas e outros detalhes. O modelo de interpretação não recebe URLs de mídia nem credenciais. A transcrição limita cada pedido a 6.000 caracteres e falha antes de chamar qualquer aplicação quando não consegue processar a fala.
 
+Para usar voz, o remetente precisa ter ao menos uma conexão ativa. Sem conexões, o Hub orienta enviar `conexões` por texto e não inicia uma transcrição paga. A primeira conexão continua disponível por texto/QR Code.
+
 O Hub assume o envio das respostas e do indicador de digitação. Correções usam a sessão e o rascunho existentes do Cash. Somente o botão Confirmar atual grava um lançamento; texto, voz e botões de revisões anteriores não confirmam. Falhas de transcrição retornam orientação sem executar uma operação financeira. A fila persiste a referência cifrada, sem guardar o arquivo de áudio.
 
 A ponte aguarda até 240 segundos para respostas do assistente Cash, sem repetir automaticamente uma chamada cujo resultado seja incerto. Configure o proxy do Cash para comportar essa duração e permita até 300 segundos para encerramento do Hub durante uma atualização. No Hub, os limites são 15 segundos para metadados de mídia, 30 para download e 60 para transcrição, sem repetição automática. Consultas curtas continuam com limite de 45 segundos.
