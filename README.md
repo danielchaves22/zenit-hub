@@ -92,7 +92,7 @@ No piloto, configure `HUB_ALLOWED_SENDERS` com os identificadores permitidos. De
 
 Esta versão substitui SQLite por PostgreSQL. A base `zenit_hub` verificada no Render estava vazia; não há importação automática de SQLite. Se houver dados locais antigos, preserve o arquivo e sua chave antes da troca.
 
-O código da ponte incorpora a funcionalidade de áudio do Cash (`8aa502a`). A junção é local; a versão publicada somente com áudio ainda não inclui a ponte do Hub. Mantenha o webhook no Cash até publicar a ponte e concluir o piloto abaixo.
+O código da ponte incorpora a funcionalidade de áudio do Cash (`8aa502a`). A ponte foi publicada no commit `9ddc456`, e o Hub foi publicado no Render com PostgreSQL em 29/09/2026. A comunicação assinada entre os serviços foi validada. O callback WhatsApp do app Meta foi transferido para o Hub e aceito pela verificação da Meta, mantendo `messages` na versão v25.0. A validação completa com mensagens reais segue o roteiro abaixo.
 
 1. Publique o código da ponte Cash mantendo o webhook atual e configure os conectores em ambiente de teste.
 2. Valide com um número de teste: QR/vínculo Cash, consulta, áudio inicial, correção por novo áudio, rejeição de confirmação por voz/texto e por botão antigo, confirmação pelo botão revisado e reentrega sem duplicação; conecte Day/Google com contas próprias; teste desconexão e permissões.

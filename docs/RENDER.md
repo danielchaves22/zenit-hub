@@ -1,6 +1,10 @@
 # Publicação do Zenit Hub no Render
 
-Configuração verificada em 29/09/2026. Este guia prepara a publicação; nenhuma conta ou configuração de produção é modificada automaticamente pelos arquivos locais.
+Configuração verificada em 29/09/2026. O serviço foi publicado em `https://zenit-hub.onrender.com`, no plano `0.5c-512mb` (US$ 7/mês), na região Oregon. A base `zenit_hub` está na versão 1, com sete tabelas incluindo o controle de migrações. O pre-deploy, `/health`, a ponte assinada com o Cash (`9ddc456`) e a autenticação do webhook foram validados no ambiente publicado. O callback WhatsApp do app Meta foi alterado para `https://zenit-hub.onrender.com/webhooks/whatsapp`; a Meta aceitou a verificação e a assinatura de `messages` foi preservada na versão v25.0. O piloto com mensagens reais é uma validação separada.
+
+O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Day, Calendar e IA de consolidação ainda não têm credenciais configuradas; o fluxo Cash usa a IA já existente no Cash.
+
+Para rollback do canal, restaure na Meta o callback anterior `https://zenit-esmn.onrender.com/api/webhooks/whatsapp`, usando o mesmo token de verificação já existente. Preserve a base e a chave do Hub. O Cash mantém seu endpoint anterior ativo.
 
 ## Serviço e armazenamento
 
@@ -23,7 +27,7 @@ Use o PostgreSQL já existente no Render, na região Oregon. Não é necessário
 | Instâncias | `1` |
 | Disco | Nenhum |
 | Auto Deploy | Desabilitado durante o piloto |
-| Encerramento | `maxShutdownDelaySeconds: 300` no Blueprint |
+| Encerramento | `maxShutdownDelaySeconds: 300`, aplicado pelo CLI/API ou pelo Blueprint |
 
 O Render fornece `PORT`; não copie `PORT=3210` do arquivo local. O servidor usa `HUB_HOST=0.0.0.0` para aceitar o tráfego da plataforma. A base PostgreSQL já deve existir. O pre-deploy aplica as migrações versionadas; `npm start` apenas verifica a versão e inicia. Se a migração falhar, o deploy deve parar. O build não acessa o banco.
 
@@ -35,6 +39,7 @@ Mantenha uma instância. Um bloqueio de sessão no PostgreSQL permite que apenas
 2. Para usar `render.yaml`, escolha **New > Blueprint** e selecione o repositório/branch. O arquivo propõe um serviço pago e reutiliza a base existente; revise os recursos e custos antes de aplicar. O Blueprint já usa `region: oregon`, a região do banco existente.
 3. Preencha os campos solicitados. O Blueprint gera `HUB_ENCRYPTION_KEY`, `CASH_HUB_SHARED_SECRET` e `WHATSAPP_WEBHOOK_VERIFY_TOKEN` automaticamente. Preserve os valores gerados. Configure as variáveis dos conectores adicionais depois, em **Environment**.
 4. Alternativamente, escolha **New > Web Service**, selecione o repositório, reproduza a tabela acima e adicione as variáveis abaixo manualmente. Não crie um serviço por cada método.
+   Na criação manual, o `render.yaml` não é aplicado automaticamente. Configure o encerramento pelo CLI oficial já autenticado: `render services update SEU_SERVICE_ID --max-shutdown-delay 300 --output json`, ou pelo endpoint Update Service da API. Esse ajuste dá tempo para concluir uma mensagem de áudio durante atualizações.
 5. Use a URL HTTPS efetivamente atribuída pelo Render em `HUB_PUBLIC_URL`. O nome escolhido pode não resultar exatamente em `https://zenit-hub.onrender.com`. Se o endereço atribuído for diferente do informado inicialmente, corrija Environment e faça novo deploy antes de usar os links OAuth.
 6. Confira `https://SEU_HUB/health`: deve retornar `{"application":"zenit-hub","status":"ok"}`. Esse endpoint verifica processo e PostgreSQL; não testa as credenciais dos conectores.
 
