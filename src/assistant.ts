@@ -139,7 +139,8 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
       const response = await jsonRequest(this.fetcher, 'https://api.openai.com/v1/responses', {
         method: 'POST', headers: { Authorization: `Bearer ${this.config.ai.key}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: this.config.ai.model, instructions, input, tools: enabled.map(name => definitions[name]),
-          store: false, max_output_tokens: 1800, parallel_tool_calls: false })
+          store: false, max_output_tokens: 1800, parallel_tool_calls: false,
+          ...(this.config.ai.effort ? { reasoning: { effort: this.config.ai.effort } } : {}) })
       });
       const output = Array.isArray(response.output) ? response.output : [];
       const requested = output.filter((item: any) => item.type === 'function_call');

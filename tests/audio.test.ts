@@ -97,7 +97,7 @@ test('a typed correction after voice has the visible Cash draft as context and p
     const cash = { connected: async () => true, message: async (message: unknown) => {
       received.push(message); return [{ text: received.length === 1 ? 'Aguardando confirmação: despesa de R$ 50,00.' : 'Rascunho corrigido: R$ 45,00.' }];
     } };
-    const withAI = { ...config, ai: { key: 'test-key', model: 'test-model' } };
+    const withAI = { ...config, ai: { ...config.ai, key: 'test-key', model: 'test-model' } };
     const assistant = new Assistant(withAI, store, new OAuth(config, store), cash as any, {} as any, {} as any,
       (async (_url, init) => {
         modelCalls++;

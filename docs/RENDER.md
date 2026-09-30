@@ -103,6 +103,7 @@ O código aceita apenas HTTPS para um backend Cash remoto. Portanto, nesta vers�
 | --- | --- |
 | `OPENAI_API_KEY` | Chave de um projeto OpenAI com acesso à API |
 | `OPENAI_MODEL` | ID explícito de um modelo disponível na sua conta, compatível com Responses API e function calling |
+| `OPENAI_REASONING_EFFORT` | Opcional, deve ser suportado pelo modelo; `none` preserva a configuração econômica do Cash com `gpt-6-luna` |
 
 Essas variáveis habilitam interpretação e consolidação no Hub. Com somente Cash conectado, mensagens financeiras usam o assistente do Cash. Áudios continuam usando as credenciais/modelo de transcrição configurados no Cash. O Hub não importa automaticamente as configurações de IA armazenadas no Cash.
 

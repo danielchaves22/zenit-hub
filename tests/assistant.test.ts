@@ -8,7 +8,7 @@ import { OAuth } from '../src/oauth.js';
 import { Assistant } from '../src/assistant.js';
 import { Day } from '../src/connectors/day.js';
 import { Calendar } from '../src/connectors/calendar.js';
-const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), OPENAI_API_KEY: 'model-secret', OPENAI_MODEL: 'test-model',
+const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), OPENAI_API_KEY: 'model-secret', OPENAI_MODEL: 'test-model', OPENAI_REASONING_EFFORT: 'none',
   DAY_SUPABASE_URL: 'https://example.supabase.co', DAY_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test', DAY_CLIENT_ID: 'client', DAY_CLIENT_SECRET: 'secret' });
 const message = { id: 'wamid.1', sender: 'alice', text: 'O que tenho pendente?', timestamp: Date.now() / 1000 };
 async function connection(store: Store, provider: 'day' | 'calendar') {
@@ -32,6 +32,7 @@ test('cross-application questions query connected tools with server-owned identi
     const oauth = new OAuth(config, store);
     const fetcher = (async (_url, init) => {
       const body = JSON.parse(String(init?.body)); requests.push(body);
+      assert.deepEqual(body.reasoning, { effort: 'none' });
       const output = requests.length === 1 ? [{ type: 'function_call', name: 'day_subjects', call_id: '1', arguments: JSON.stringify({ status: 'pending', dueBefore: null, limit: 20 }) }]
         : requests.length === 2 ? [{ type: 'function_call', name: 'calendar_events', call_id: '2', arguments: JSON.stringify({ start: '2026-09-29T00:00:00-03:00', end: '2026-09-30T00:00:00-03:00', calendarId: 'primary', limit: 20 }) }]
           : [{ type: 'message', content: [{ type: 'output_text', text: 'Você tem uma tarefa e um compromisso.' }] }];
