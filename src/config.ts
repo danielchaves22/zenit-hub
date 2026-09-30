@@ -3,7 +3,7 @@ import { readDatabaseConfig } from './database.js';
 
 function safeUrl(value: string) {
   const u = new URL(value);
-  if (u.username || u.password || u.search || u.hash || u.pathname !== '/' ||
+  if (u.username || u.password || u.search || u.hash || u.hostname.includes('*') || u.pathname !== '/' ||
       (u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)))) {
     throw new Error('Use uma origem HTTPS, ou HTTP apenas em localhost.');
   }
@@ -34,7 +34,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
     ai: { key: env.OPENAI_API_KEY || '', model: env.OPENAI_MODEL || '',
       effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional().parse(env.OPENAI_REASONING_EFFORT || undefined) },
     google: { clientId: env.GOOGLE_CLIENT_ID || '', secret: env.GOOGLE_CLIENT_SECRET || '' },
-    day: { url: dayUrl, key: dayKey, clientId: env.DAY_CLIENT_ID || '', secret: env.DAY_CLIENT_SECRET || '' }
+    day: { url: dayUrl, siteUrl: optionalOrigin('DAY_SITE_URL'), key: dayKey, clientId: env.DAY_CLIENT_ID || '', secret: env.DAY_CLIENT_SECRET || '' }
   };
 }
 export type Config = ReturnType<typeof readConfig>;

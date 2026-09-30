@@ -17,7 +17,9 @@ export function createApp(config: Config, store: Store, oauth: OAuth, whatsapp: 
     // Preserve the Origin of same-origin form POSTs without leaking link tokens
     // in the Referer when the browser redirects to an external OAuth provider.
     res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin', 'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': `default-src 'none'; form-action 'self' https://accounts.google.com ${config.day.url}; frame-ancestors 'none'; base-uri 'none'` }); next();
+      // Chromium checks every redirect after a form submission: Supabase sends
+      // the browser onward to the Day consent site, hosted on a separate origin.
+      'Content-Security-Policy': `default-src 'none'; form-action 'self' https://accounts.google.com ${config.day.url} ${config.day.siteUrl}; frame-ancestors 'none'; base-uri 'none'` }); next();
   });
   app.get('/health', async (_req, res) => {
     try { await store.health(); return res.json({ application: 'zenit-hub', status: 'ok' }); }

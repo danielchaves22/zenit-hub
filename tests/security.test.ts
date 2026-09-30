@@ -10,6 +10,15 @@ import { Worker } from '../src/worker.js';
 
 const key = randomBytes(32).toString('base64');
 const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: key, WHATSAPP_APP_SECRET: 'meta-secret', WHATSAPP_PHONE_NUMBER_ID: 'phone-1' });
+
+test('Day consent CSP origin cannot contain wildcard destinations or URL credentials', () => {
+  const base = { DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: key };
+  for (const DAY_SITE_URL of ['https://*.onrender.com', 'https://user:password@day.example.test',
+    'https://day.example.test/oauth/consent', 'http://day.example.test', 'https://day.example.test?next=other']) {
+    assert.throws(() => readConfig({ ...base, DAY_SITE_URL }));
+  }
+  assert.equal(readConfig({ ...base, DAY_SITE_URL: 'https://day.example.test/' }).day.siteUrl, 'https://day.example.test');
+});
 test('tokens are encrypted, authenticated, and bound to their owner and provider', () => {
   const vault = new Vault(key); const encrypted = vault.seal({ token: 'private-token' }, 'alice:day');
   assert(!encrypted.includes('private-token'));

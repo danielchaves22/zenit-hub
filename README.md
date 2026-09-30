@@ -61,7 +61,7 @@ Siga `C:\dev\equinox\zenit-day\docs\ZENIT_HUB.md`.
 
 É preciso aplicar a migração local de proteção OAuth, publicar a página `/oauth/consent` do Day e habilitar o servidor OAuth no projeto Supabase. Registre o Hub como cliente confidencial (`client_secret_basic`) com callback exato `HUB_PUBLIC_URL/oauth/day/callback`.
 
-Configure `DAY_SUPABASE_URL`, chave **publicável**, `DAY_CLIENT_ID` e `DAY_CLIENT_SECRET` no Hub. A senha do usuário é enviada pelo navegador diretamente ao Auth do Day. O Hub recebe somente a autorização OAuth. Não use `service_role` ou chave secreta administrativa. O Hub testa a capacidade `zenit_day_hub_connection_check` antes de aceitar a conexão.
+Configure `DAY_SUPABASE_URL`, `DAY_SITE_URL` (origem HTTPS da tela de consentimento), chave **publicável**, `DAY_CLIENT_ID` e `DAY_CLIENT_SECRET` no Hub. A senha do usuário é enviada pelo navegador diretamente ao Auth do Day. O Hub recebe somente a autorização OAuth. Não use `service_role` ou chave secreta administrativa. O Hub testa a capacidade `zenit_day_hub_connection_check` antes de aceitar a conexão.
 
 As consultas retornam somente dados sincronizados; alterações offline ainda não enviadas pelo Day não aparecem.
 

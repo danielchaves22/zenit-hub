@@ -131,18 +131,21 @@ O conector usa o Supabase já existente do Day. Ele não cria um novo banco para
 3. No Supabase do Day, habilite **Authentication > OAuth Server**. Configure **Site URL** para a origem web do Day e **Authorization Path** como `/oauth/consent`. Mantenha registro dinâmico desabilitado no piloto.
 4. Registre o Hub como cliente **Confidential**, com autenticação `client_secret_basic` e callback exato `https://SEU_HUB/oauth/day/callback`.
 5. Antes de gerar o frontend web do Day, configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_HUB_CLIENT_ID` e `VITE_HUB_PUBLIC_URL`. O `VITE_HUB_CLIENT_ID` é o mesmo `DAY_CLIENT_ID` do Hub. Não inclua o secret no frontend.
-6. No Hub, configure os quatro valores abaixo. Em seguida, faça novo deploy.
+6. No Hub, configure os cinco valores abaixo. Em seguida, faça novo deploy.
 
 | Variável | Valor / origem |
 | --- | --- |
 | `DAY_SUPABASE_URL` | `https://SEU_PROJETO.supabase.co` |
+| `DAY_SITE_URL` | Origem HTTPS da tela de consentimento, igual ao Site URL do Supabase; neste ambiente, `https://zenit-day.onrender.com` |
 | `DAY_SUPABASE_PUBLISHABLE_KEY` | Chave pública `sb_publishable_...`; não usar `service_role` ou chave secreta administrativa |
 | `DAY_CLIENT_ID` | Client ID do Hub registrado no OAuth Server do Day |
 | `DAY_CLIENT_SECRET` | Secret desse cliente confidencial, somente no backend Hub |
 
 O Static Site do Day está em `https://zenit-day.onrender.com` (`srv-dauke459fdbs739acepg`): build `npm ci --include=dev && npm run build`, diretório publicado `dist`, rewrite `/oauth/consent` → `/index.html` e cabeçalho `Referrer-Policy: no-referrer` em `/*`. Usa Node 22, `SKIP_INSTALL_DEPS=true` e auto-deploy desabilitado. As variáveis públicas foram definidas **no build** desse site. O cliente OAuth confidencial usa `client_secret_basic`, callback exato `https://zenit-hub.onrender.com/oauth/day/callback` e registro dinâmico desabilitado. Os detalhes de autorização e validação estão em `zenit-day/docs/ZENIT_HUB.md`.
 
-Você pode ativar os conectores gradualmente. Para deixar Day desabilitado, omita suas quatro variáveis, em vez de cadastrar URLs/chaves fictícias. O mesmo vale para as credenciais Google e de IA.
+O Hub precisa permitir as duas origens do Day na política `form-action`: Supabase e site de consentimento. O navegador valida toda a sequência de redirecionamentos após o botão **Continuar**. Sem `DAY_SITE_URL`, o Chromium pode bloquear a navegação antes do login. Use a origem exata, sem caminhos nem curingas.
+
+Você pode ativar os conectores gradualmente. Para deixar Day desabilitado, omita suas cinco variáveis, em vez de cadastrar URLs/chaves fictícias. O mesmo vale para as credenciais Google e de IA.
 
 ## Ordem de ativação do canal
 

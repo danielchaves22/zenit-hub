@@ -11,7 +11,9 @@ import { createApp } from '../src/app.js';
 import { metaSignature } from '../src/security.js';
 test('real HTTP ingress persists signed messages once; OAuth pages require cookie-bound POST', async () => {
   const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), WHATSAPP_APP_SECRET: 'secret',
-    WHATSAPP_PHONE_NUMBER_ID: 'phone', WHATSAPP_WEBHOOK_VERIFY_TOKEN: 'verify', GOOGLE_CLIENT_ID: 'google', GOOGLE_CLIENT_SECRET: 'secret' });
+    WHATSAPP_PHONE_NUMBER_ID: 'phone', WHATSAPP_WEBHOOK_VERIFY_TOKEN: 'verify', GOOGLE_CLIENT_ID: 'google', GOOGLE_CLIENT_SECRET: 'secret',
+    DAY_SUPABASE_URL: 'https://example.supabase.co', DAY_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+    DAY_SITE_URL: 'https://day.example.test', DAY_CLIENT_ID: 'day', DAY_CLIENT_SECRET: 'secret' });
   const store = (await createTestStore(config.key)); const oauth = new OAuth(config, store);
   const server = createApp(config, store, oauth, new WhatsApp(config)).listen(0, '127.0.0.1');
   await once(server, 'listening'); const origin = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -39,6 +41,12 @@ test('real HTTP ingress persists signed messages once; OAuth pages require cooki
       body: new URLSearchParams({ csrf }), redirect: 'manual' });
     assert.equal(start.status, 303); assert(start.headers.get('location')?.startsWith('https://accounts.google.com/'));
     assert.equal(start.headers.get('referrer-policy'), 'same-origin');
+    const dayToken = (await oauth.createLink('alice', 'day')).split('/').at(-1)!;
+    const dayPage = await fetch(`${origin}/connect/${dayToken}`);
+    // Both redirects must be permitted by the originating form's CSP, not just
+    // the Supabase authorize endpoint. Keep the remaining restrictions intact.
+    assert.equal(dayPage.headers.get('content-security-policy'),
+      "default-src 'none'; form-action 'self' https://accounts.google.com https://example.supabase.co https://day.example.test; frame-ancestors 'none'; base-uri 'none'");
     assert.equal((await fetch(`${origin}/health`)).status, 200);
     const enqueue = store.enqueue.bind(store); const health = store.health.bind(store);
     try {
