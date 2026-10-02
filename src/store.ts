@@ -34,6 +34,8 @@ export class Store {
         await tx.query("UPDATE inbox SET state='uncertain' WHERE state='processing'");
         await tx.query("UPDATE outbox SET state='uncertain' WHERE state='sending'");
         await tx.query("UPDATE calendar_drafts SET state='uncertain' WHERE state='executing'");
+        await tx.query("UPDATE notification_drafts SET state='uncertain' WHERE state='executing'");
+        await tx.query("UPDATE notification_deliveries SET state='uncertain',reason='interrupted' WHERE state='sending'");
       });
       return true;
     } catch (error) {
@@ -58,7 +60,9 @@ export class Store {
   private async saveConnection(client: Pool | PoolClient, c: Connection) {
     await client.query(`INSERT INTO connections(sender,provider,data) VALUES($1,$2,$3)
       ON CONFLICT(sender,provider) DO UPDATE SET data=EXCLUDED.data`,
-    [c.sender, c.provider, this.vault.seal(c.provider === 'calendar' ? { ...c, grantId: randomToken() } : c, `connection:${c.sender}:${c.provider}`)]);
+    [c.sender, c.provider, this.vault.seal({ ...c, grantId: randomToken() }, `connection:${c.sender}:${c.provider}`)]);
+    await client.query("UPDATE notification_subscriptions SET enabled=false,revision=revision+1 WHERE sender=$1", [c.sender]);
+    await client.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
     if (c.provider === 'calendar') await client.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
   }
   async connect(c: Connection) { await transaction(this.db, tx => this.saveConnection(tx, c)); }
@@ -78,6 +82,8 @@ export class Store {
       await tx.query('DELETE FROM oauth_links WHERE sender=$1 AND provider=$2', [sender, provider]);
       await tx.query('DELETE FROM connections WHERE sender=$1 AND provider=$2', [sender, provider]);
       await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
+      await tx.query("UPDATE notification_subscriptions SET enabled=false,revision=revision+1 WHERE sender=$1", [sender]);
+      await tx.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
       if (provider === 'calendar') await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
     });
   }
@@ -116,6 +122,8 @@ export class Store {
       await tx.query(`INSERT INTO sender_state(sender,cash_disabled) VALUES($1,$2)
         ON CONFLICT(sender) DO UPDATE SET cash_disabled=EXCLUDED.cash_disabled`, [sender, disabled]);
       await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
+      await tx.query("UPDATE notification_subscriptions SET enabled=false,revision=revision+1 WHERE sender=$1", [sender]);
+      await tx.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
     });
   }
   async link(token: string, sender: string, provider: Provider, data: unknown, phase = 'link') {
@@ -199,6 +207,8 @@ export class Store {
       await tx.query('DELETE FROM history WHERE created<$1', [Date.now() - 86400_000]);
       await tx.query("DELETE FROM inbox WHERE created<$1 AND state='done'", [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM outbox WHERE created<$1 AND state='sent'", [Date.now() - 30 * 86400_000]);
+      await tx.query("DELETE FROM notification_drafts WHERE expires<$1 AND state<>'executing'", [Date.now() - 30 * 86400_000]);
+      await tx.query("DELETE FROM notification_deliveries WHERE created<$1 AND state NOT IN ('pending','sending')", [Date.now() - 30 * 86400_000]);
     });
   }
 }

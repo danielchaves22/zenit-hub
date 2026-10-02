@@ -47,6 +47,15 @@ export class WhatsApp {
     const timer = setInterval(() => void indicate(), 20_000); timer.unref();
     try { return await work(); } finally { clearInterval(timer); }
   }
+  receipts(body:Buffer,signature:string):{id:string;status:string}[] {
+    if(!this.config.meta.secret || !equal(metaSignature(body,this.config.meta.secret),signature)) throw new Error('signature');
+    const payload=JSON.parse(body.toString('utf8'));const receipts:{id:string;status:string}[]=[];
+    if(payload.object!=='whatsapp_business_account') return receipts;
+    for(const e of payload.entry||[]) for(const c of e.changes||[]) {
+      if(c.field!=='messages'||c.value?.metadata?.phone_number_id!==this.config.meta.phoneId) continue;
+      for(const s of c.value.statuses||[]) if(typeof s.id==='string'&&s.id.length<=256&&['delivered','read','failed'].includes(s.status)) receipts.push({id:s.id,status:s.status});
+    }return receipts;
+  }
   async send(sender: string, reply: Reply) {
     const token = this.config.meta.token;
     if (!token || !this.config.meta.phoneId) throw new Error('WhatsApp not configured');

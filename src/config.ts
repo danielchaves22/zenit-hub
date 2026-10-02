@@ -35,6 +35,8 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
       transcriptionModel: env.WHATSAPP_TRANSCRIPTION_MODEL?.trim() || 'gpt-transcribe',
       effort: z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).optional().parse(env.OPENAI_REASONING_EFFORT || undefined) },
     google: { clientId: env.GOOGLE_CLIENT_ID || '', secret: env.GOOGLE_CLIENT_SECRET || '' },
+    notifications: { wabaId: env.WHATSAPP_BUSINESS_ACCOUNT_ID || '', language: 'pt_BR',
+      summaryTemplate: env.WHATSAPP_SUMMARY_TEMPLATE || '', reminderTemplate: env.WHATSAPP_REMINDER_TEMPLATE || '' },
     day: { url: dayUrl, siteUrl: optionalOrigin('DAY_SITE_URL'), key: dayKey, clientId: env.DAY_CLIENT_ID || '', secret: env.DAY_CLIENT_SECRET || '' }
   };
 }

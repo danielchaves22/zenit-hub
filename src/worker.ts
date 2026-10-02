@@ -33,6 +33,7 @@ export class Worker {
       try { await this.whatsapp.send(outgoing.sender, outgoing.reply); await this.store.sent(outgoing.id, true); }
       catch { await this.store.sent(outgoing.id, false); console.error('hub.reply.uncertain'); }
     }
+    if(!this.stopping) await this.assistant.notifications?.tick();
     if (Date.now() - this.prunedAt > 60_000) { await this.store.prune(); this.prunedAt = Date.now(); }
   }
 }

@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createTestStore } from './database-helper.js';
 import { Store } from '../src/store.js';
 import { createPool, readDatabaseConfig } from '../src/database.js';
-import { migrate } from '../src/migrations.js';
+import { migrate, schemaVersion } from '../src/migrations.js';
 import { Worker } from '../src/worker.js';
 import type { Connection, Reply } from '../src/types.js';
 
@@ -25,13 +25,15 @@ test('migrations are repeatable and do not reset persisted encrypted connections
   try {
     await store.connect(connection);
     await Promise.all([migrate(store.db), migrate(store.db)]);
-    assert.equal((await store.db.query('SELECT count(*)::int AS n FROM hub_schema_migrations')).rows[0].n, 2);
-    assert.deepEqual(await store.connection('alice', 'day'), connection);
+    assert.equal((await store.db.query('SELECT count(*)::int AS n FROM hub_schema_migrations')).rows[0].n, schemaVersion);
+    assert.match((await store.connection('alice', 'day'))!.grantId!, /^[A-Za-z0-9_-]{43}$/);
+    assert.deepEqual({ ...(await store.connection('alice', 'day')), grantId: undefined }, { ...connection, grantId: undefined });
     const raw = JSON.stringify((await store.db.query('SELECT * FROM connections')).rows);
     assert(!raw.includes('access-private') && !raw.includes('alice@example.com'));
     await store.db.query('DELETE FROM hub_schema_migrations');
     await assert.rejects(migrate(store.db));
-    assert.deepEqual(await store.connection('alice', 'day'), connection);
+    assert.match((await store.connection('alice', 'day'))!.grantId!, /^[A-Za-z0-9_-]{43}$/);
+    assert.deepEqual({ ...(await store.connection('alice', 'day')), grantId: undefined }, { ...connection, grantId: undefined });
     assert.equal((await store.db.query('SELECT count(*)::int AS n FROM hub_schema_migrations')).rows[0].n, 0);
   } finally { await store.close(); }
 });
@@ -49,7 +51,8 @@ test('concurrent ingress, claims and OAuth consumption never duplicate work', as
     await store.addHistory('alice', 'assistant', 'old-account-private-context');
     assert.equal((await Promise.all([store.approveLink('alice', 'approval', true), store.approveLink('alice', 'approval', true)])).filter(Boolean).length, 1);
     assert.deepEqual(await store.history('alice'), []);
-    assert.deepEqual(await store.connection('alice', 'day'), connection);
+    assert.match((await store.connection('alice', 'day'))!.grantId!, /^[A-Za-z0-9_-]{43}$/);
+    assert.deepEqual({ ...(await store.connection('alice', 'day')), grantId: undefined }, { ...connection, grantId: undefined });
   } finally { await store.close(); }
 });
 
@@ -85,7 +88,7 @@ test('deployment overlap elects one worker; restart preserves data and quarantin
     assert.equal((await second.db.query('SELECT state FROM inbox')).rows[0].state, 'uncertain');
     assert.equal((await second.db.query('SELECT state FROM outbox')).rows[0].state, 'uncertain');
     assert.equal(await second.nextMessage(), null); assert.equal(await second.nextReply(), null);
-    assert.deepEqual(await second.connection('alice', 'day'), connection);
+    assert.deepEqual({ ...(await second.connection('alice', 'day')), grantId: undefined }, { ...connection, grantId: undefined });
     assert.equal(await second.enqueue(message), false);
   } finally { if (!first.db.ended) await first.close(); await second.close(); await fixture.close(); }
 });

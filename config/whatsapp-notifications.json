@@ -1,0 +1,22 @@
+[
+  {
+    "name": "zenit_resumo_diario_v1",
+    "language": "pt_BR",
+    "category": "UTILITY",
+    "components": [{
+      "type": "BODY",
+      "text": "Seu resumo diário do Zenit para {{1}}, conforme a assinatura que você ativou.\n\nAgenda principal: {{2}}\n\nContas vencendo: {{3}}\n\nDay (tarefas e retomadas): {{4}}\n\nPara alterar horário ou fontes, responda nesta conversa. Para cancelar o envio, envie: cancelar resumo diário.",
+      "example": { "body_text": [["02/10/2026", "1 evento: 14:00 Reunião do projeto.", "1 conta vencendo hoje: internet, R$ 100,00.", "2 assuntos: preparar reunião e revisar planejamento."]] }
+    }]
+  },
+  {
+    "name": "zenit_lembrete_day_v1",
+    "language": "pt_BR",
+    "category": "UTILITY",
+    "components": [{
+      "type": "BODY",
+      "text": "Este é um lembrete que você cadastrou no Zenit Day e escolheu receber pelo WhatsApp.\n\nLembrete: {{1}}\nHorário programado: {{2}}\n\nPara consultar ou alterar, envie: meus lembretes. Para parar estes avisos, envie: cancelar lembretes do Day.",
+      "example": { "body_text": [["Separar o livro para devolver na escola", "08/10/2026, 06:30 (America/Sao_Paulo)"]] }
+    }]
+  }
+]

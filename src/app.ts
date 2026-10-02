@@ -5,6 +5,7 @@ import { Store } from './store.js';
 import { WhatsApp } from './whatsapp.js';
 import { digest, equal, randomToken } from './security.js';
 import { PublicError, type Provider } from './types.js';
+import { NotificationStore } from './notification-store.js';
 
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const page = (title: string, content: string) => `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)} · Zenit Hub</title><body><main><h1>${escape(title)}</h1>${content}</main></body></html>`;
@@ -36,6 +37,7 @@ export function createApp(config: Config, store: Store, oauth: OAuth, whatsapp: 
     try { incoming = whatsapp.parse(req.body, String(req.headers['x-hub-signature-256'] || '')); }
     catch { return res.sendStatus(401); }
     for (const message of incoming) await store.enqueue(message);
+    for(const receipt of whatsapp.receipts(req.body,String(req.headers['x-hub-signature-256']||''))) await new NotificationStore(store).receipt(receipt.id,receipt.status);
     return res.status(202).json({ accepted: true });
   });
   app.get('/connect/:token', async (req, res) => {

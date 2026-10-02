@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 2;
+export const schemaVersion = 3;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -61,6 +61,30 @@ export async function migrate(pool: Pool) {
       CREATE UNIQUE INDEX calendar_drafts_pending ON calendar_drafts(sender) WHERE state='pending';
       CREATE INDEX calendar_drafts_expires ON calendar_drafts(expires);
       INSERT INTO hub_schema_migrations(version) VALUES (2);`);
+    }
+    if (!rows.some(row => row.version === 3)) {
+      await client.query(`CREATE TABLE notification_subscriptions (
+        sender TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('daily_summary','day_reminders')),
+        enabled BOOLEAN NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL,
+        next_check BIGINT NOT NULL, checked_at BIGINT NOT NULL, updated BIGINT NOT NULL,
+        PRIMARY KEY(sender,kind)
+      );
+      CREATE INDEX notification_subscriptions_due ON notification_subscriptions(next_check) WHERE enabled;
+      CREATE TABLE notification_drafts (
+        hash TEXT PRIMARY KEY,sender TEXT NOT NULL,data TEXT NOT NULL,expires BIGINT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','executing','done','cancelled','uncertain')),result TEXT
+      );
+      CREATE UNIQUE INDEX notification_drafts_pending ON notification_drafts(sender) WHERE state='pending';
+      CREATE INDEX notification_drafts_expiry ON notification_drafts(expires);
+      CREATE TABLE notification_deliveries (
+        id TEXT PRIMARY KEY,sender TEXT NOT NULL,kind TEXT NOT NULL,revision INTEGER NOT NULL,
+        due BIGINT NOT NULL,expires BIGINT NOT NULL,data TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','sending','accepted','delivered','read','failed','skipped','uncertain')),
+        meta_id TEXT UNIQUE,reason TEXT,created BIGINT NOT NULL
+      );
+      CREATE INDEX notification_deliveries_due ON notification_deliveries(due) WHERE state='pending';
+      CREATE INDEX notification_deliveries_history ON notification_deliveries(sender,created DESC);
+      INSERT INTO hub_schema_migrations(version) VALUES(3);`);
     }
   });
 }
