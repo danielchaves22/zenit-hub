@@ -135,14 +135,16 @@ test('realized spending uses the authenticated Cash read tool with filters and s
   const store = await createTestStore(config.key); await connection(store, 'calendar');
   try {
     const oauth = new OAuth(config, store); const queries: unknown[] = []; let calls = 0; let forwarded = 0;
-    const args = { startDate: '2026-09-01', endDate: '2026-09-30', category: 'Alimentação', groupByCategory: true, mode: 'LIST', page: 2, limit: 10 };
+    const args = { startDate: '2026-09-01', endDate: '2026-09-30', category: 'Alimentação', groupByCategory: true, fixedExpenses: 'EXCLUDE_FIXED', mode: 'LIST', page: 2, limit: 10 };
     const report = { data: { ok: true, summary: { total: { netExpenses: '100.00', monthlyAverage: '100.00' } }, items: [], pagination: { hasMore: true } } };
     const assistant = new Assistant(config, store, oauth, {
       connected: async () => true, message: async () => { forwarded++; return []; },
       query: async (sender: string, tool: string, input: unknown) => { queries.push({ sender, tool, input }); return report; }
     } as any, {} as any, {} as any, (async (_url, init) => {
       const body = JSON.parse(String(init?.body)); calls++;
-      assert(body.tools.some((tool: any) => tool.name === 'cash_expenses'));
+      const expenses = body.tools.find((tool: any) => tool.name === 'cash_expenses');
+      assert.deepEqual(expenses.parameters.properties.fixedExpenses.enum, ['ALL', 'ONLY_FIXED', 'EXCLUDE_FIXED']);
+      assert(expenses.parameters.required.includes('fixedExpenses'));
       if (calls === 1) return new Response(JSON.stringify({ output: [{ type: 'function_call', name: 'cash_expenses', call_id: 'expenses', arguments: JSON.stringify(args) }] }));
       assert.deepEqual(JSON.parse(body.input.find((item: any) => item.call_id === 'expenses' && item.type === 'function_call_output').output), report);
       return new Response(JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'Total: R$ 100,00. Há mais lançamentos.' }] }] }));
