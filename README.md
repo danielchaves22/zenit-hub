@@ -1,122 +1,35 @@
 # Zenit Hub
 
-Backend pessoal de conexões para conversar com Cash, Day e Google Calendar pelo WhatsApp. Cada aplicação mantém seus dados e suas regras. O Hub guarda somente conexões, mensagens recentes e estado operacional.
+Backend de conexões para conversar com Cash, Day e Google Calendar pelo WhatsApp. Cada aplicação mantém seus dados e suas regras. O Hub coordena o canal, as autorizações independentes, as consultas e a entrega das notificações assinadas.
 
-## Versão 0.1
+## Capacidades
 
-- Entrada única pela WhatsApp Cloud API, validada por assinatura e identificação do número de destino.
-- Cash: preserva QR Code, vínculo existente, assistente financeiro e confirmações por botão. O Hub transcreve áudios antes de escolher o serviço, usando o mesmo fluxo e histórico das mensagens digitadas. Com somente Cash conectado, o texto (digitado ou transcrito) vai diretamente ao assistente atual; `cash: ...` também força esse destino.
-- Day e Calendar: autorização pelo navegador, seguida de confirmação da conta na conversa que originou o pedido. Contas independentes, sem SSO ou senha própria do Hub.
-- Consultas consolidadas por ferramentas. Assuntos do Day permanecem somente leitura; lembretes têm consentimento próprio e gestão por confirmação. Calendar permite consulta, criação, alteração e exclusão de eventos, sempre com prévia e confirmação por botão. Alterações financeiras seguem o fluxo existente do Cash.
-- [Notificações pelo WhatsApp](docs/NOTIFICACOES.md): catálogo, resumo diário, assinatura de lembretes do Day, pausa/cancelamento, agendamento persistente e estados de entrega. Exigem consentimento explícito e templates configurados/aprovados na Meta; conectar aplicações não ativa envios.
-- Gastos realizados: `cash_expenses` consulta totais, lançamentos paginados e médias mensais por período, com categoria opcional e agrupamento por categoria. `fixedExpenses` permite todos (padrão `ALL`), somente fixas (`ONLY_FIXED`) ou sem fixas (`EXCLUDE_FIXED`), pela origem registrada no Cash, inclusive nos estornos; a listagem identifica as fixas com `isFixed`. Cash separa despesas fora do cartão, compras no cartão e total, sem contar pagamentos de fatura novamente. A base é a data da compra/competência; meses sem gastos entram na média e meses parciais são identificados. Exemplos: “Quanto gastei hoje sem as fixas?”, “Liste apenas as despesas fixas de setembro” e “Qual a média mensal por categoria nos últimos seis meses?”. Publicar o backend Cash com `get_realized_expenses` e o filtro antes desta versão do Hub; não exige migração ou nova configuração.
-- PostgreSQL com credenciais e conteúdo de mensagens cifrados por AES-256-GCM; contexto limitado a 12 mensagens por pessoa e 24 horas.
-- Webhook persistido antes de retornar 202. IDs impedem processamento repetido; o worker é serial e pode ser retomado após reiniciar.
+- Consultas financeiras, inclusive gastos realizados com filtros, totais e média mensal; escritas continuam no fluxo confirmado do Cash.
+- Consulta de assuntos do Day e gestão de lembretes com autorização adicional.
+- Consulta, criação, alteração e exclusão de eventos comuns no Calendar, com prévia e confirmação.
+- Texto e voz pelo mesmo fluxo; transcrição única no Hub.
+- Catálogo de notificações, resumo diário e lembretes do Day, com assinatura explícita e templates configurados/aprovados.
 
-```text
-WhatsApp → Hub → ponte autenticada do Cash → serviços financeiros
-              → API do Day (Supabase OAuth + RLS)
-              → API do Google Calendar (OAuth)
-```
+Veja os [guias públicos](https://zenitapp.net/docs/help/zenit-hub/getting-started/) para uso. Conectar uma aplicação não ativa notificações automaticamente.
 
-## Execução local
+## Desenvolvimento local
 
-Node 22.14+ dentro da série 22 e PostgreSQL 14+. Use uma base exclusiva, `zenit_hub`, e uma instância do processo. Para hospedagem no Render, veja [o procedimento de publicação](docs/RENDER.md) e o [Blueprint](render.yaml).
+Requer Node.js >=22.14 e <23 e PostgreSQL 14+. Use uma base exclusiva zenit_hub e uma instância do processo.
 
 ```powershell
 npm ci
 Copy-Item .env.example .env
-# Edite .env sem compartilhar valores de credenciais.
+# Preencha configurações locais e credenciais sem compartilhá-las.
 npm run build
 npm run db:migrate
 npm start
 ```
 
-`DATABASE_URL` é obrigatória e aponta para a base do Hub, nunca para a base do Cash. `npm run db:migrate` cria as tabelas em transação e registra a versão; a primeira execução exige um schema vazio. A inicialização verifica a versão, sem criar tabelas. `GET /health` verifica também a conexão PostgreSQL.
+DATABASE_URL é obrigatória; não aponte para a base do Cash. HUB_ENCRYPTION_KEY contém 32 bytes aleatórios em base64 e precisa permanecer estável, protegida junto aos backups. A primeira migração exige schema vazio. O servidor verifica a versão ao iniciar, sem aplicar migrações automaticamente.
 
-`HUB_ENCRYPTION_KEY` deve conter 32 bytes aleatórios em base64 e deve ser mantida estável e protegida junto aos backups. Perdê-la impede decifrar conexões existentes. Não use chave do JWT do Cash ou segredos dos provedores como chave do Hub.
+Localmente, o endereço padrão é http://127.0.0.1:3210. GET /health verifica processo e PostgreSQL; não comprova que os provedores externos estão autorizados.
 
-Localmente, o servidor escuta em `127.0.0.1:3210`. No Render, defina `HUB_HOST=0.0.0.0`, use o `PORT` fornecido pela plataforma e configure `HUB_PUBLIC_URL` com a origem pública HTTPS exata. Em hospedagem própria, use um proxy HTTPS. Defina limites de requisições na entrada. Não registre URLs de callback, cabeçalhos Authorization, corpo de mensagens ou parâmetros OAuth nos logs. Faça backup da base PostgreSQL `zenit_hub` e proteja os arquivos e a chave: IDs operacionais de remetentes permanecem visíveis no índice, embora tokens e conteúdo sejam cifrados.
-
-## Configuração dos conectores
-
-### Cash
-
-1. Instale no backend Cash a ponte `POST /api/integrations/hub/bridge` incluída nesta extração.
-2. Configure o mesmo `CASH_HUB_SHARED_SECRET` de pelo menos 32 caracteres aleatórios nos dois serviços. Sem ele a ponte fica desabilitada.
-3. Aponte `CASH_API_URL` para a origem HTTPS do Cash. `CASH_CONNECT_URL` é opcional e aponta ao perfil/integrações do Cash.
-4. Mantenha `CASH_BINDING_PREFIX` igual ao `WHATSAPP_BINDING_MESSAGE_PREFIX` do Cash (padrão `VINCULAR ZENIT`).
-
-A ponte é uma integração interna de primeira parte, com assinatura HMAC, timestamp, nonce e deduplicação por ID de mensagem. Não é um servidor OAuth público nem um acesso administrativo ao banco. Cash resolve o remetente pelo vínculo validado por QR Code e verifica usuário/workspace, acesso aos aplicativos e permissões financeiras em cada execução. Hub nunca fornece `userId`, `companyId` ou `role`.
-
-O registro de mensagens já existente no Cash é reutilizado, sem nova migração. Os endpoints e o assistente web/mobile continuam disponíveis. A compatibilidade inicial da ponte Cash usa remetentes numéricos do fluxo existente; suportar outros identificadores do WhatsApp requer evoluir também o vínculo do Cash.
-
-Mensagens de voz são baixadas e transcritas **no Hub**, usando `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `OPENAI_API_KEY` e `WHATSAPP_TRANSCRIPTION_MODEL` (padrão `gpt-transcribe`) do Hub. O contexto da transcrição é neutro, sem presumir um domínio financeiro. Depois da transcrição, o mesmo fluxo usado para texto escolhe Cash, Day ou Calendar e trata comandos de conexão. Áudio para Day/Calendar funciona sem vínculo Cash. Somente pedidos financeiros chegam ao Cash, como texto, com o mesmo remetente e ID da mensagem; não há segunda transcrição.
-
-O Hub aceita até 16 MB, valida tipo, tamanho, hash quando fornecido e destino HTTPS da mídia Meta, bloqueando redirecionamentos. O arquivo fica apenas em memória. A fila mantém a referência cifrada; o texto transcrito e a resposta entram no histórico curto cifrado (até 12 mensagens e 24 horas), permitindo continuar por voz ou texto sem perder datas e outros detalhes. O modelo de interpretação não recebe URLs de mídia nem credenciais. A transcrição limita cada pedido a 6.000 caracteres e falha antes de chamar qualquer aplicação quando não consegue processar a fala.
-
-Para usar voz, o remetente precisa ter ao menos uma conexão ativa. Sem conexões, o Hub orienta enviar `conexões` por texto e não inicia uma transcrição paga. A primeira conexão continua disponível por texto/QR Code.
-
-O Hub assume o envio das respostas e do indicador de digitação. Correções usam a sessão e o rascunho existentes do Cash. Somente o botão Confirmar atual grava um lançamento; texto, voz e botões de revisões anteriores não confirmam. Falhas de transcrição retornam orientação sem executar uma operação financeira. A fila persiste a referência cifrada, sem guardar o arquivo de áudio.
-
-A ponte aguarda até 240 segundos para respostas do assistente Cash, sem repetir automaticamente uma chamada cujo resultado seja incerto. Configure o proxy do Cash para comportar essa duração e permita até 300 segundos para encerramento do Hub durante uma atualização. No Hub, os limites são 15 segundos para metadados de mídia, 30 para download e 60 para transcrição, sem repetição automática. Consultas curtas continuam com limite de 45 segundos.
-
-### Day
-
-Siga `C:\dev\equinox\zenit-day\docs\ZENIT_HUB.md`.
-
-É preciso aplicar a migração local de proteção OAuth, publicar a página `/oauth/consent` do Day e habilitar o servidor OAuth no projeto Supabase. Registre o Hub como cliente confidencial (`client_secret_basic`) com callback exato `HUB_PUBLIC_URL/oauth/day/callback`.
-
-Configure `DAY_SUPABASE_URL`, `DAY_SITE_URL` (origem HTTPS da tela de consentimento), chave **publicável**, `DAY_CLIENT_ID` e `DAY_CLIENT_SECRET` no Hub. A senha do usuário é enviada pelo navegador diretamente ao Auth do Day. O Hub recebe somente a autorização OAuth. Não use `service_role` ou chave secreta administrativa. O Hub testa a capacidade `zenit_day_hub_connection_check` antes de aceitar a conexão.
-
-As consultas retornam somente dados sincronizados; alterações offline ainda não enviadas pelo Day não aparecem.
-
-### Calendar
-
-Registre um cliente OAuth web no Google Cloud com callback exato `HUB_PUBLIC_URL/oauth/calendar/callback`, habilite Calendar API e configure a tela de consentimento e os usuários de teste ou publicação conforme o ambiente. Configure `GOOGLE_CLIENT_ID` e `GOOGLE_CLIENT_SECRET` no Hub.
-
-Escopos: `openid`, `email`, `https://www.googleapis.com/auth/calendar.events` e `https://www.googleapis.com/auth/calendar.calendarlist.readonly`. A agenda padrão é `primary`; o assistente pode listar outras agendas autorizadas, respeitando o papel de leitor/editor no Google. Autorizações antigas de somente leitura precisam ser refeitas com `conectar Calendar`.
-
-Criação, alteração e exclusão de eventos comuns exigem uma prévia determinística com conta, agenda, título e horário, seguida do botão **Confirmar** no WhatsApp. Texto ou voz não confirmam. Os rascunhos ficam cifrados no PostgreSQL, expiram em dez minutos e são vinculados à conexão e ao remetente. Uma nova prévia substitui a anterior; reconectar ou desconectar invalida as pendências. O botão é consumido atomicamente e não repete a operação, inclusive após reinício. O Hub usa um ID próprio ao criar e `If-Match` ao alterar/excluir: mudanças feitas no Google após a prévia exigem nova revisão. Timeouts ficam em `uncertain`, sem repetição automática.
-
-São aceitos eventos com horário ou de dia inteiro, título, descrição, local e lembretes popup do Google (não notificações proativas no WhatsApp). Datas ambíguas e horários incompletos devem ser esclarecidos. Alterar/excluir exige consultar o ID do evento na mesma solicitação. É possível editar uma ocorrência recorrente individual; criação/edição da série inteira, convidados, Google Meet e tipos especiais de evento ainda ficam no Google Calendar. Ao editar/excluir um evento que já possui convidados, a prévia informa os participantes e o possível envio de notificações pelo Google (`sendUpdates=all`).
-
-### IA e WhatsApp
-
-Configure `OPENAI_API_KEY` e `OPENAI_MODEL` para consultas entre aplicações. Os comandos de conexão não usam IA. Se somente Cash estiver conectado, usa-se a configuração de IA já existente no Cash.
-
-No piloto, configure `HUB_ALLOWED_SENDERS` com os identificadores permitidos. Defina no Hub as credenciais do número WhatsApp, App Secret e token de verificação. A versão da Graph API é configurável e deve ser a mesma validada no ambiente. A migração não modifica a configuração da Meta automaticamente.
-
-## Uso
-
-- `conexões`: lista as conexões e apresenta botões.
-- `conectar Day`, `conectar Calendar`: link temporário; login/autorização no provedor; confirmação final na conversa.
-- `conectar Cash`: orienta a usar o vínculo do Cash. O QR Code existente já pode ser enviado ao número que o Hub atende.
-- `desconectar Day`, `desconectar Calendar`: elimina os tokens locais, os links pendentes e o histórico do Hub. A autorização concedida no provedor pode ser revogada também na conta de origem.
-- `desconectar Cash`: remove o vínculo no Cash e desabilita seu uso no Hub.
-- `cash: ...`: encaminha explicitamente ao assistente financeiro.
-- Perguntas como “Quais contas vencem nesta semana?”, “Quais tarefas estão pendentes?” e “Tenho compromissos amanhã?” usam as conexões autorizadas.
-- “Crie Show Crossroads em 23/12/2026 das 14h às 17h”, “Mude o Show Crossroads de 23/12/2026 para 15h às 18h” ou “Exclua esse compromisso” geram uma prévia; só o botão grava na agenda.
-- Áudio: consulta Day e Calendar, prepara eventos e inicia/corrige pedidos financeiros no Cash. Compartilha o contexto com mensagens digitadas. Respostas e confirmação continuam por texto/botões.
-
-## Migração e operação
-
-Esta versão substitui SQLite por PostgreSQL. A base `zenit_hub` verificada no Render estava vazia; não há importação automática de SQLite. Se houver dados locais antigos, preserve o arquivo e sua chave antes da troca.
-
-O código da ponte incorpora a funcionalidade de áudio do Cash (`8aa502a`). A ponte foi publicada no commit `9ddc456`, e o Hub foi publicado no Render com PostgreSQL em 29/09/2026. A comunicação assinada entre os serviços foi validada. O callback WhatsApp do app Meta foi transferido para o Hub e aceito pela verificação da Meta, mantendo `messages` na versão v25.0. A validação completa com mensagens reais segue o roteiro abaixo.
-
-1. Publique o código da ponte Cash mantendo o webhook atual e configure os conectores em ambiente de teste.
-2. Valide com um número de teste: QR/vínculo Cash, consulta, áudio inicial, correção por novo áudio, rejeição de confirmação por voz/texto e por botão antigo, confirmação pelo botão revisado e reentrega sem duplicação; conecte Day/Google com contas próprias; teste desconexão e permissões.
-3. Depois da validação, troque o callback Meta para `HUB_PUBLIC_URL/webhooks/whatsapp`. Um único serviço deve receber cada evento. O número e os vínculos Cash existentes são preservados.
-4. Em rollback, volte o callback ao Cash. Day/Calendar ficam indisponíveis naquele canal, e o fluxo financeiro continua no backend anterior. Preserve o banco e a chave do Hub.
-
-O pool mantém até 5 conexões por processo por padrão (`HUB_DATABASE_POOL_MAX`, entre 2 e 10), incluindo uma sessão reservada ao bloqueio do worker. Use conexão direta PostgreSQL, sem pooler em modo transaction. Durante um deploy, a nova versão recebe webhooks, mas espera o bloqueio da anterior antes de processar a fila. A perda dessa sessão encerra o processo. O encerramento normal espera a operação ativa e libera o banco. A retenção é executada a cada minuto.
-
-O Hub não repete automaticamente uma operação interrompida nem um envio cujo resultado seja incerto. Registros `uncertain` exigem conferência operacional para evitar duplicar efeitos. Uma operação aceita remotamente antes de um timeout pode ter sido concluída. IDs e erros genéricos permitem diagnosticar sem imprimir credenciais. Mídias diferentes de áudio e notificações proativas não fazem parte desta versão. Confirmações de entrega não são sincronizadas de volta aos registros antigos do Cash.
-
-## Validação
-
-Os testes usam PostgreSQL real em schemas descartáveis de uma base local terminada em `_test`. A configuração é independente de `DATABASE_URL` e recusa hosts remotos. Para usar o ambiente de teste fornecido:
+## Verificação
 
 ```powershell
 docker compose -f compose.test.yaml up -d --wait
@@ -124,15 +37,14 @@ Copy-Item .env.test.example .env.test
 npm run check
 ```
 
-Se já houver um PostgreSQL local, configure `TEST_DATABASE_URL` em `.env.test` com uma base de teste existente. Nunca aponte testes para o Render. O build no Render compila e verifica tipos; os testes devem rodar localmente ou no CI.
+Os testes usam PostgreSQL local em base terminada em \_test, com schemas descartáveis. Nunca use a base do Render. OAuth, mensagens reais e aprovação/entrega de templates exigem validação separada.
 
-`npm run check` testa assinatura, destino do webhook, fila, repetição, criptografia, isolamento por remetente, OAuth/PKCE, CSRF, confirmação final, renovação de tokens, consultas entre domínios, encaminhamento de áudio, indicador de digitação e ingressos HTTP reais com serviços externos simulados. O teste de integração `assistant-runtime` no Cash percorre os dois caminhos (webhook anterior e ponte Hub), incluindo correção por áudio e exatamente um lançamento após o botão revisado.
+## Documentação técnica
 
-Os testes não equivalem à validação com credenciais Google/Meta/Supabase reais. A ativação exige configurar os serviços acima e executar o piloto antes de trocar o webhook de produção.
+- [Arquitetura e responsabilidades](docs/ARQUITETURA.md)
+- [Conectores e permissões](docs/CONECTORES.md)
+- [Notificações e assinaturas](docs/NOTIFICACOES.md)
+- [Publicação no Render](docs/RENDER.md) e [Blueprint](render.yaml)
+- [Operação, rollback e testes](docs/OPERACAO.md)
 
-## Referências do protocolo
-
-- [Google OAuth web server](https://developers.google.com/identity/protocols/oauth2/web-server)
-- [Supabase OAuth server](https://supabase.com/docs/guides/auth/oauth-server/getting-started)
-- [Supabase token security](https://supabase.com/docs/guides/auth/oauth-server/token-security)
-- [OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)
+Para consultar conexões no WhatsApp, envie conexões. Para o catálogo de assinaturas, envie notificações. Os detalhes de instalação de cada conector estão nos guias acima; nenhum segredo deve ir para o cliente, para a IA ou para o Git.

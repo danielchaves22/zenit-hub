@@ -1,6 +1,8 @@
 # Publicação do Zenit Hub no Render
 
-Configuração atualizada em 30/09/2026. O serviço está publicado em `https://zenit-hub.onrender.com`, no plano `0.5c-512mb` (US$ 7/mês), na região Oregon. A base `zenit_hub` está na versão 2, incluindo `calendar_drafts`. O pre-deploy, `/health`, a ponte assinada com o Cash (`9ddc456`) e a autenticação do webhook foram validados no ambiente publicado. O callback WhatsApp do app Meta foi alterado para `https://zenit-hub.onrender.com/webhooks/whatsapp`; a Meta aceitou a verificação e a assinatura de `messages` foi preservada na versão v25.0.
+## Registro da implantação inicial (30/09/2026)
+
+Os parágrafos desta seção registram verificações feitas naquela implantação; não equivalem a uma nova checagem de saúde. Configuração revisada documentalmente em 02/10/2026. O serviço está publicado em `https://zenit-hub.onrender.com`, no plano `0.5c-512mb` (US$ 7/mês), na região Oregon. Naquela implantação, a base `zenit_hub` estava na versão 2, incluindo `calendar_drafts`. O pre-deploy, `/health`, a ponte assinada com o Cash (`9ddc456`) e a autenticação do webhook foram validados no ambiente publicado. O callback WhatsApp do app Meta foi alterado para `https://zenit-hub.onrender.com/webhooks/whatsapp`; a Meta aceitou a verificação e a assinatura de `messages` foi preservada na versão v25.0.
 
 O serviço foi criado pelo formulário, sem associação a Blueprint. O prazo de encerramento de 300 segundos foi aplicado e confirmado pelo CLI oficial do Render. Auto-deploy permanece desabilitado. Calendar e IA de consolidação estão configurados; o fluxo Cash mantém sua IA existente. O usuário confirmou o funcionamento da conexão Calendar e do teste de evento pelo WhatsApp. A página de autorização do Day está publicada, o cliente OAuth foi cadastrado e as quatro variáveis do conector foram salvas no Hub. A proteção de somente leitura foi aplicada e testada no Supabase; a conexão pessoal do Day ainda aguarda validação pelo WhatsApp.
 
@@ -10,28 +12,32 @@ O teste real de `conexões` passou após essa correção: uma entrada `done`, um
 
 Para rollback do canal, restaure **nos dois níveis, app e WABA**, o callback anterior `https://zenit-esmn.onrender.com/api/webhooks/whatsapp`, usando o mesmo token de verificação já existente. O callback WABA é configurado por `POST /WABA_ID/subscribed_apps`, com `override_callback_uri` e `verify_token`, autenticado pelo token do próprio app. Preserve a base e a chave do Hub. O Cash mantém seu endpoint anterior ativo.
 
+## Configuração de referência
+
+Para novas implantações, siga as seções abaixo e o [Blueprint](../render.yaml). O valor do plano e o estado descritos no registro inicial são históricos; confira a configuração e o preço no painel antes de criar recursos. Para habilitar notificações, configure também os [templates e consentimentos](NOTIFICACOES.md).
+
 ## Serviço e armazenamento
 
 O Hub é um **Web Service Node**, com uma única instância. Não é um Static Site. O worker roda no mesmo processo e o estado fica na base PostgreSQL `zenit_hub`, separada da base `zenit` do Cash.
 
 Use o PostgreSQL já existente no Render, na região Oregon. Não é necessário disco persistente no Web Service nem outra instância de PostgreSQL. Compartilhar a instância mantém CPU, memória, armazenamento e limite de conexões compartilhados; as tabelas ficam separadas.
 
-| Campo | Valor |
-| --- | --- |
-| Nome | `zenit-hub` |
-| Runtime | Node |
-| Node | `>=22.14.0 <23` |
-| Plano | Pago de `0.5 CPU / 512 MB` (`0.5c-512mb`) como ponto de partida |
-| Região | Oregon, mesma região da instância PostgreSQL |
-| Root Directory | Raiz do repositório do Hub |
-| Build Command | `npm ci --include=dev && npm run typecheck && npm run build` |
-| Pre-Deploy Command | `npm run db:migrate` |
-| Start Command | `npm start` |
-| Health Check Path | `/health` |
-| Instâncias | `1` |
-| Disco | Nenhum |
-| Auto Deploy | Desabilitado durante o piloto |
-| Encerramento | `maxShutdownDelaySeconds: 300`, aplicado pelo CLI/API ou pelo Blueprint |
+| Campo              | Valor                                                                   |
+| ------------------ | ----------------------------------------------------------------------- |
+| Nome               | `zenit-hub`                                                             |
+| Runtime            | Node                                                                    |
+| Node               | `>=22.14.0 <23`                                                         |
+| Plano              | Pago de `0.5 CPU / 512 MB` (`0.5c-512mb`) como ponto de partida         |
+| Região             | Oregon, mesma região da instância PostgreSQL                            |
+| Root Directory     | Raiz do repositório do Hub                                              |
+| Build Command      | `npm ci --include=dev && npm run typecheck && npm run build`            |
+| Pre-Deploy Command | `npm run db:migrate`                                                    |
+| Start Command      | `npm start`                                                             |
+| Health Check Path  | `/health`                                                               |
+| Instâncias         | `1`                                                                     |
+| Disco              | Nenhum                                                                  |
+| Auto Deploy        | Desabilitado durante o piloto                                           |
+| Encerramento       | `maxShutdownDelaySeconds: 300`, aplicado pelo CLI/API ou pelo Blueprint |
 
 O Render fornece `PORT`; não copie `PORT=3210` do arquivo local. O servidor usa `HUB_HOST=0.0.0.0` para aceitar o tráfego da plataforma. A base PostgreSQL já deve existir. O pre-deploy aplica as migrações versionadas; `npm start` apenas verifica a versão e inicia. Se a migração falhar, o deploy deve parar. O build não acessa o banco.
 
@@ -53,23 +59,23 @@ No painel da instância PostgreSQL, copie **Internal Database URL** para o `DATA
 
 Exemplo apenas estrutural: `postgresql://USUARIO:SENHA@HOST_INTERNO:5432/zenit_hub`. Para acesso fora do Render, use a **External Database URL** apontando para `/zenit_hub` e TLS com `sslmode=verify-full`. A URL interna é para serviços na mesma região e rede privada.
 
-O comando `npm run db:migrate` cria as seis tabelas operacionais e o controle `hub_schema_migrations` em uma transação. É seguro repeti-lo. Na primeira execução, recusa um schema com tabelas preexistentes. Nenhum dado do Cash é importado. Faça backup específico da base `zenit_hub` e preserve `HUB_ENCRYPTION_KEY`; não há migração automática de um SQLite anterior.
+O comando `npm run db:migrate` aplica as migrações versionadas registradas em `hub_schema_migrations`, em transação. A sequência atual inclui a base operacional, os rascunhos do Calendar e as notificações (versão 3). É seguro repeti-lo. Na primeira execução, recusa um schema com tabelas preexistentes. Nenhum dado do Cash é importado. Faça backup específico da base `zenit_hub` e preserve `HUB_ENCRYPTION_KEY`; não há migração automática de um SQLite anterior.
 
 ## Variáveis no serviço Hub
 
 ### Base
 
-| Variável | Valor / origem |
-| --- | --- |
-| `NODE_VERSION` | `>=22.14.0 <23` |
-| `NODE_ENV` | `production` |
-| `HUB_HOST` | `0.0.0.0` |
-| `HUB_PUBLIC_URL` | Origem HTTPS pública, sem caminho; exemplo ilustrativo `https://zenit-hub.onrender.com` |
-| `DATABASE_URL` | Internal Database URL da instância existente, com o nome da base substituído por `zenit_hub` |
-| `HUB_DATABASE_POOL_MAX` | `5` por processo; inclui a sessão reservada ao worker |
-| `HUB_ENCRYPTION_KEY` | 32 bytes aleatórios codificados em base64; gerada pelo Blueprint ou pelo comando abaixo |
-| `HUB_TIME_ZONE` | `America/Sao_Paulo` |
-| `HUB_ALLOWED_SENDERS` | Seu identificador WhatsApp, só dígitos, com DDI/DDD, conforme o remetente recebido pela Meta. Vários separados por vírgula. Vazio libera qualquer remetente que chegue ao número |
+| Variável                | Valor / origem                                                                                                                                                                   |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_VERSION`          | `>=22.14.0 <23`                                                                                                                                                                  |
+| `NODE_ENV`              | `production`                                                                                                                                                                     |
+| `HUB_HOST`              | `0.0.0.0`                                                                                                                                                                        |
+| `HUB_PUBLIC_URL`        | Origem HTTPS pública, sem caminho; exemplo ilustrativo `https://zenit-hub.onrender.com`                                                                                          |
+| `DATABASE_URL`          | Internal Database URL da instância existente, com o nome da base substituído por `zenit_hub`                                                                                     |
+| `HUB_DATABASE_POOL_MAX` | `5` por processo; inclui a sessão reservada ao worker                                                                                                                            |
+| `HUB_ENCRYPTION_KEY`    | 32 bytes aleatórios codificados em base64; gerada pelo Blueprint ou pelo comando abaixo                                                                                          |
+| `HUB_TIME_ZONE`         | `America/Sao_Paulo`                                                                                                                                                              |
+| `HUB_ALLOWED_SENDERS`   | Seu identificador WhatsApp, só dígitos, com DDI/DDD, conforme o remetente recebido pela Meta. Vários separados por vírgula. Vazio libera qualquer remetente que chegue ao número |
 
 Para a criação manual, execute **localmente** o comando a seguir uma vez para cada segredo novo. Cada execução produz um valor diferente; cole diretamente no campo correspondente do Render e guarde em local seguro. Não coloque os valores no Git ou no chat.
 
@@ -81,28 +87,28 @@ Não troque `HUB_ENCRYPTION_KEY` a cada deploy. A mesma chave é necessária par
 
 ### Cash e WhatsApp
 
-| Variável | Valor / origem |
-| --- | --- |
-| `CASH_API_URL` | Origem HTTPS do **backend** Cash, sem `/api`; a ponte já acrescenta `/api/integrations/hub/bridge` |
-| `CASH_HUB_SHARED_SECRET` | Segredo de pelo menos 32 caracteres, **idêntico no Hub e no backend Cash** |
-| `CASH_BINDING_PREFIX` | Mesmo valor do `WHATSAPP_BINDING_MESSAGE_PREFIX` do Cash; padrão `VINCULAR ZENIT` |
-| `CASH_CONNECT_URL` | Opcional: página do Cash onde o usuário gera o QR Code |
-| `WHATSAPP_API_VERSION` | Mesma versão da Graph API já validada no Cash |
-| `WHATSAPP_PHONE_NUMBER_ID` | ID do número na Meta; não é o telefone em formato `+55...` |
-| `WHATSAPP_ACCESS_TOKEN` | Token Meta válido com acesso ao mesmo número usado pelo Cash |
-| `WHATSAPP_APP_SECRET` | App Secret do app Meta que assina o webhook |
-| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Segredo escolhido/gerado para verificar o novo callback; informar o mesmo na Meta |
+| Variável                        | Valor / origem                                                                                     |
+| ------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `CASH_API_URL`                  | Origem HTTPS do **backend** Cash, sem `/api`; a ponte já acrescenta `/api/integrations/hub/bridge` |
+| `CASH_HUB_SHARED_SECRET`        | Segredo de pelo menos 32 caracteres, **idêntico no Hub e no backend Cash**                         |
+| `CASH_BINDING_PREFIX`           | Mesmo valor do `WHATSAPP_BINDING_MESSAGE_PREFIX` do Cash; padrão `VINCULAR ZENIT`                  |
+| `CASH_CONNECT_URL`              | Opcional: página do Cash onde o usuário gera o QR Code                                             |
+| `WHATSAPP_API_VERSION`          | Mesma versão da Graph API já validada no Cash                                                      |
+| `WHATSAPP_PHONE_NUMBER_ID`      | ID do número na Meta; não é o telefone em formato `+55...`                                         |
+| `WHATSAPP_ACCESS_TOKEN`         | Token Meta válido com acesso ao mesmo número usado pelo Cash                                       |
+| `WHATSAPP_APP_SECRET`           | App Secret do app Meta que assina o webhook                                                        |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Segredo escolhido/gerado para verificar o novo callback; informar o mesmo na Meta                  |
 
-Publique a versão do backend Cash que contém a ponte do Hub. O deploy de áudio isolado não contém essa ponte. Adicione `CASH_HUB_SHARED_SECRET` no serviço **Cash**, e mantenha lá as credenciais Meta/OpenAI existentes: ele ainda baixa e transcreve os áudios. Hub e Cash podem compartilhar as credenciais Meta do mesmo app/número. Não use a chave de criptografia do Hub como segredo da ponte.
+Publique a versão do backend Cash que contém a ponte do Hub. O deploy de áudio isolado não contém essa ponte. Adicione `CASH_HUB_SHARED_SECRET` no serviço **Cash** e mantenha suas credenciais Meta/OpenAI para o assistente financeiro e o caminho direto de compatibilidade. No ingresso atual, o Hub baixa e transcreve o áudio uma única vez e envia texto ao Cash. Hub e Cash podem compartilhar as credenciais Meta do mesmo app/número. Não use a chave de criptografia do Hub como segredo da ponte.
 
 O código aceita apenas HTTPS para um backend Cash remoto. Portanto, nesta versão, use a origem pública HTTPS do Cash, mesmo se ambos estiverem no Render. A chamada de uma mensagem aguarda até 240 segundos; confira também qualquer proxy adicional na frente do Cash.
 
 ### IA para consultas entre aplicações
 
-| Variável | Valor / origem |
-| --- | --- |
-| `OPENAI_API_KEY` | Chave de um projeto OpenAI com acesso à API |
-| `OPENAI_MODEL` | ID explícito de um modelo disponível na sua conta, compatível com Responses API e function calling |
+| Variável                  | Valor / origem                                                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `OPENAI_API_KEY`          | Chave de um projeto OpenAI com acesso à API                                                                 |
+| `OPENAI_MODEL`            | ID explícito de um modelo disponível na sua conta, compatível com Responses API e function calling          |
 | `OPENAI_REASONING_EFFORT` | Opcional, deve ser suportado pelo modelo; `none` preserva a configuração econômica do Cash com `gpt-6-luna` |
 
 Essas variáveis habilitam interpretação e consolidação no Hub. Com somente Cash conectado, mensagens financeiras usam o assistente do Cash. Para áudio, configure também `WHATSAPP_TRANSCRIPTION_MODEL` (opcional, padrão `gpt-transcribe`). A transcrição usa `OPENAI_API_KEY` e as credenciais Meta **do Hub**; a chave precisa ter acesso ao endpoint de transcrição. O Hub não importa automaticamente as configurações de IA armazenadas no Cash. Não há migração de banco nem alteração no webhook para ativar esse fluxo. Referência: [transcrição de arquivos na OpenAI](https://developers.openai.com/api/docs/guides/speech-to-text).
@@ -115,10 +121,10 @@ No Google Cloud, habilite a Google Calendar API, configure a tela de consentimen
 
 Configure no Render do Hub:
 
-| Variável | Valor / origem |
-| --- | --- |
-| `GOOGLE_CLIENT_ID` | Client ID do cliente OAuth web |
-| `GOOGLE_CLIENT_SECRET` | Secret desse cliente |
+| Variável               | Valor / origem                 |
+| ---------------------- | ------------------------------ |
+| `GOOGLE_CLIENT_ID`     | Client ID do cliente OAuth web |
+| `GOOGLE_CLIENT_SECRET` | Secret desse cliente           |
 
 O Hub solicita `openid`, `email`, `calendar.events` (consulta, criação, alteração e exclusão de eventos) e `calendar.calendarlist.readonly`. Não solicita administração nem compartilhamento de agendas. Em modo de teste, inclua sua conta entre os usuários de teste. Para aplicativos externos em status Testing, o Google emite refresh tokens que expiram em sete dias com esses escopos; trate esse modo como piloto, não como configuração definitiva de uso diário. A publicação/verificação da tela de consentimento depende da configuração do projeto Google.
 
@@ -148,15 +154,15 @@ O conector usa o Supabase já existente do Day. Ele não cria um novo banco para
 5. Antes de gerar o frontend web do Day, configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_HUB_CLIENT_ID` e `VITE_HUB_PUBLIC_URL`. O `VITE_HUB_CLIENT_ID` é o mesmo `DAY_CLIENT_ID` do Hub. Não inclua o secret no frontend.
 6. No Hub, configure os cinco valores abaixo. Em seguida, faça novo deploy.
 
-| Variável | Valor / origem |
-| --- | --- |
-| `DAY_SUPABASE_URL` | `https://SEU_PROJETO.supabase.co` |
-| `DAY_SITE_URL` | Origem HTTPS da tela de consentimento, igual ao Site URL do Supabase; neste ambiente, `https://zenit-day.onrender.com` |
-| `DAY_SUPABASE_PUBLISHABLE_KEY` | Chave pública `sb_publishable_...`; não usar `service_role` ou chave secreta administrativa |
-| `DAY_CLIENT_ID` | Client ID do Hub registrado no OAuth Server do Day |
-| `DAY_CLIENT_SECRET` | Secret desse cliente confidencial, somente no backend Hub |
+| Variável                       | Valor / origem                                                                                                         |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `DAY_SUPABASE_URL`             | `https://SEU_PROJETO.supabase.co`                                                                                      |
+| `DAY_SITE_URL`                 | Origem HTTPS da tela de consentimento, igual ao Site URL do Supabase; neste ambiente, `https://zenit-day.onrender.com` |
+| `DAY_SUPABASE_PUBLISHABLE_KEY` | Chave pública `sb_publishable_...`; não usar `service_role` ou chave secreta administrativa                            |
+| `DAY_CLIENT_ID`                | Client ID do Hub registrado no OAuth Server do Day                                                                     |
+| `DAY_CLIENT_SECRET`            | Secret desse cliente confidencial, somente no backend Hub                                                              |
 
-O Static Site do Day está em `https://zenit-day.onrender.com` (`srv-dauke459fdbs739acepg`): build `npm ci --include=dev && npm run build`, diretório publicado `dist`, rewrite `/oauth/consent` → `/index.html` e cabeçalho `Referrer-Policy: no-referrer` em `/*`. Usa Node 22, `SKIP_INSTALL_DEPS=true` e auto-deploy desabilitado. As variáveis públicas foram definidas **no build** desse site. O cliente OAuth confidencial usa `client_secret_basic`, callback exato `https://zenit-hub.onrender.com/oauth/day/callback` e registro dinâmico desabilitado. Os detalhes de autorização e validação estão em `zenit-day/docs/ZENIT_HUB.md`.
+O Static Site do Day está em `https://zenit-day.onrender.com` (`srv-dauke459fdbs739acepg`): build `npm ci --include=dev && npm run build`, diretório publicado `dist`, rewrites `/oauth/consent` → `/index.html` e `/hub/reminders` → `/index.html`, e cabeçalho `Referrer-Policy: no-referrer` em `/*`. Usa Node 22, `SKIP_INSTALL_DEPS=true` e auto-deploy desabilitado. As variáveis públicas foram definidas **no build** desse site. O cliente OAuth confidencial usa `client_secret_basic`, callback exato `https://zenit-hub.onrender.com/oauth/day/callback` e registro dinâmico desabilitado. Os detalhes de autorização e validação estão em `zenit-day/docs/ZENIT_HUB.md`.
 
 O Hub precisa permitir as duas origens do Day na política `form-action`: Supabase e site de consentimento. O navegador valida toda a sequência de redirecionamentos após o botão **Continuar**. Sem `DAY_SITE_URL`, o Chromium pode bloquear a navegação antes do login. Use a origem exata, sem caminhos nem curingas.
 
