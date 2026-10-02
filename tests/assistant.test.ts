@@ -130,3 +130,45 @@ test('Calendar mutation IDs must come from a read in the current request and unc
     await assert.rejects(assistant.handle(message)); assert.equal(preparations, 0);
   } finally { await store.close(); }
 });
+
+test('realized spending uses the authenticated Cash read tool with filters and server totals', async () => {
+  const store = await createTestStore(config.key); await connection(store, 'calendar');
+  try {
+    const oauth = new OAuth(config, store); const queries: unknown[] = []; let calls = 0; let forwarded = 0;
+    const args = { startDate: '2026-09-01', endDate: '2026-09-30', category: 'Alimentação', groupByCategory: true, mode: 'LIST', page: 2, limit: 10 };
+    const report = { data: { ok: true, summary: { total: { netExpenses: '100.00', monthlyAverage: '100.00' } }, items: [], pagination: { hasMore: true } } };
+    const assistant = new Assistant(config, store, oauth, {
+      connected: async () => true, message: async () => { forwarded++; return []; },
+      query: async (sender: string, tool: string, input: unknown) => { queries.push({ sender, tool, input }); return report; }
+    } as any, {} as any, {} as any, (async (_url, init) => {
+      const body = JSON.parse(String(init?.body)); calls++;
+      assert(body.tools.some((tool: any) => tool.name === 'cash_expenses'));
+      if (calls === 1) return new Response(JSON.stringify({ output: [{ type: 'function_call', name: 'cash_expenses', call_id: 'expenses', arguments: JSON.stringify(args) }] }));
+      assert.deepEqual(JSON.parse(body.input.find((item: any) => item.call_id === 'expenses' && item.type === 'function_call_output').output), report);
+      return new Response(JSON.stringify({ output: [{ type: 'message', content: [{ type: 'output_text', text: 'Total: R$ 100,00. Há mais lançamentos.' }] }] }));
+    }) as typeof fetch);
+    assert.equal((await assistant.handle({ ...message, text: 'Mostre a próxima página dos gastos de alimentação em setembro.' }))[0].text, 'Total: R$ 100,00. Há mais lançamentos.');
+    assert.deepEqual(queries, [{ sender: 'alice', tool: 'get_realized_expenses', input: args }]);
+    assert.equal(forwarded, 0);
+  } finally { await store.close(); }
+});
+
+test('a mistaken Cash delegation after reading recovers without forwarding a write', async () => {
+  const store = await createTestStore(config.key); await connection(store, 'calendar');
+  try {
+    let calls = 0; const tools: string[] = []; let forwarded = 0;
+    const assistant = new Assistant(config, store, new OAuth(config, store), {
+      connected: async () => true, query: async (_sender: string, name: string) => { tools.push(name); return { data: { ok: true } }; },
+      message: async () => { forwarded++; return []; }
+    } as any, {} as any, {} as any, (async (_url, init) => {
+      calls++; const body = JSON.parse(String(init?.body));
+      if (calls === 3) assert.match(body.input.at(-1).output, /Nenhuma operação foi encaminhada/);
+      const name = ['cash_overview', 'cash_assistant', 'cash_expenses'][calls - 1];
+      return new Response(JSON.stringify({ output: name ? [{ type: 'function_call', name, call_id: String(calls), arguments: '{}' }]
+        : [{ type: 'message', content: [{ type: 'output_text', text: 'Consulta concluída.' }] }] }));
+    }) as typeof fetch);
+    assert.equal((await assistant.handle({ ...message, text: 'Quanto gastei hoje?' }))[0].text, 'Consulta concluída.');
+    assert.deepEqual(tools, ['get_financial_overview', 'get_realized_expenses']);
+    assert.equal(forwarded, 0);
+  } finally { await store.close(); }
+});

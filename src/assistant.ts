@@ -20,7 +20,16 @@ const definitions = {
     window: { type: 'string', enum: ['TODAY', 'THIS_WEEK', 'NEXT_7_DAYS', 'REST_OF_MONTH', 'CUSTOM'] },
     startDate: { type: ['string', 'null'] }, endDate: { type: ['string', 'null'] }, limit: { type: 'integer', minimum: 1, maximum: 50 }
   }),
-  cash_assistant: tool('cash_assistant', 'Encaminha a mensagem ORIGINAL ao assistente Cash para registrar, revisar ou confirmar um lançamento, ou outras operações financeiras. Chame sozinha. A resposta e os botões do Cash são exibidos diretamente.', {}),
+  cash_expenses: tool('cash_expenses', 'Consulta gastos realizados, incluindo compras no cartão com fatura aberta, por data da compra/competência. Cash calcula total fora do cartão, no cartão, consolidado e média MENSAL; exclui pagamentos de fatura para não duplicar. Use para quanto gastei, listar despesas e médias; saldos/pendências não respondem essas perguntas. SUMMARY para totais/médias, LIST para listagem paginada. Totais abrangem todo o período.', {
+    startDate: { type: 'string', description: 'Data inicial INCLUSIVA YYYY-MM-DD. Para hoje, use a data local informada.' },
+    endDate: { type: 'string', description: 'Data final INCLUSIVA YYYY-MM-DD, no máximo 60 meses. Para hoje, igual ao início.' },
+    category: { type: ['string', 'null'], description: 'Nome de categoria ou caminho Pai / Filha; null para todas. Inclui subcategorias. Categoria ambígua/inexistente exige esclarecimento; não retire o filtro.' },
+    groupByCategory: { type: 'boolean', description: 'true quando solicitar separado por categorias.' },
+    mode: { type: 'string', enum: ['SUMMARY', 'LIST'] },
+    page: { type: 'integer', minimum: 1, maximum: 10000 },
+    limit: { type: 'integer', minimum: 1, maximum: 20 }
+  }),
+  cash_assistant: tool('cash_assistant', 'Encaminha a mensagem ORIGINAL ao assistente Cash para registrar, revisar ou reapresentar confirmação de um lançamento. Chame sozinha, antes de qualquer consulta. Para gastos realizados e médias use cash_expenses. A resposta e os botões do Cash são exibidos diretamente.', {}),
   day_subjects: tool('day_subjects', 'Consulta assuntos sincronizados do Day. Retomada (review_on) e prazo (due_on) são diferentes.', {
     status: { type: 'string', enum: ['pending', 'todo', 'doing', 'waiting', 'blocked', 'done'] },
     dueBefore: { type: ['string', 'null'], description: 'Filtra due_on <= YYYY-MM-DD: data máxima INCLUSIVA, sem acrescentar um dia. null inclui qualquer prazo, inclusive assuntos sem prazo. Só filtre se o usuário limitar o prazo dos assuntos.' }, limit: { type: 'integer', minimum: 1, maximum: 50 }
@@ -135,7 +144,7 @@ export class Assistant {
     if (!cashConnected && !dayConnected && !calendarConnected) return [{ text: 'Envie "conexões" para conectar Cash, Day ou Calendar e começar.' }];
     if (!this.config.ai.key || !this.config.ai.model) throw new PublicError('A interpretação de perguntas no Hub ainda precisa de configuração de IA. As conexões podem ser configuradas normalmente.');
 
-    const enabled = [ ...(cashConnected ? ['cash_overview', 'cash_due', 'cash_assistant'] : []),
+    const enabled = [ ...(cashConnected ? ['cash_overview', 'cash_due', 'cash_expenses', 'cash_assistant'] : []),
       ...(dayConnected ? ['day_subjects'] : []), ...(calendarConnected ? ['calendar_events', 'calendar_list', 'calendar_prepare'] : []) ] as (keyof typeof definitions)[];
     const history = await this.store.history(message.sender);
     const input: any[] = [...history, { role: 'user', content: message.text }];
@@ -147,6 +156,7 @@ Texto digitado e fala transcrita têm o mesmo significado e usam as mesmas conex
 Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Contas, pagamentos e vencimentos financeiros referem-se ao Cash; assuntos, tarefas e próximos passos referem-se ao Day. Se a intenção continuar ambígua, pergunte. Use o histórico para resolver complementos como "estou falando da agenda", preservando o período solicitado.
 Para consultar um fim de semana, o padrão é sábado e domingo: de sábado às 00:00 até segunda-feira às 00:00 EXCLUSIVA no fuso do usuário. Só inclua sexta ou segunda se o usuário pedir. Confira que os limites da ferramenta correspondem aos dias descritos na resposta.
 Cash mantém cálculos e permissões financeiras. Day só permite leitura. Calendar permite consultar, criar, alterar e excluir eventos comuns; escritas SEMPRE geram uma prévia e dependem do botão de confirmação. Texto "sim" ou "confirmar" não autoriza gravação; oriente usar o botão.
+Para "quanto gastei", lançamentos realizados, listagem de despesas e médias use cash_expenses; nunca calcule gastos a partir de saldos, pendências, uma página de lançamentos ou valores mencionados anteriormente. Mostre os valores calculados fora do cartão, no cartão e o total. Créditos de cartão, quando presentes, devem aparecer separados do gasto bruto e do total líquido. A data é de compra/competência, não de pagamento da fatura. Média padrão é MENSAL: use monthlyAverage e monthCount retornados. Se faltar período para uma média, pergunte. "Últimos N meses" usa N meses completos anteriores, salvo pedido para incluir o atual. Meses parciais devem ser identificados como parciais, sem extrapolar. Respeite os erros de categoria: peça esclarecimento sem remover o filtro. Para continuar listagem, preserve período/categoria e avance a página. Indique hasMore/categoriesTruncated, sem alegar listagem completa.
 Para alterar ou excluir, consulte os eventos na mesma solicitação, identifique título/data/agenda sem ambiguidades e use o ID retornado. Nunca invente IDs nem escolha arbitrariamente entre eventos semelhantes. Não diga que gravou sem resultado da API.
 calendar_prepare deve ser chamada sozinha, para um evento por vez. Ao criar ou mudar horários, obtenha início e fim claros e inclua o ano e offset do fuso; não invente duração. Para dia inteiro, end é o dia seguinte ao último dia incluído. null preserva campos na edição; para exclusão todos os campos de conteúdo são null.
 Lembretes configurados são notificações do Google Calendar, não mensagens proativas de WhatsApp. Ainda não é possível criar séries recorrentes, alterar a série inteira, gerenciar convidados, criar Meet ou editar eventos especiais; oriente usar o Google Calendar nesses casos. Pode editar/excluir uma ocorrência recorrente específica. Não converta pedido de série em evento único.
@@ -174,7 +184,17 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
         return [{ text }];
       }
       if (requested.some((i: any) => i.name === 'cash_assistant')) {
-        if (!cashConnected || requested.length !== 1 || calls !== 0) throw new PublicError('Envie o pedido financeiro em uma mensagem separada para revisar a operação no Cash.');
+        if (!cashConnected) throw new PublicError('Conecte o Cash novamente para continuar.');
+        if (requested.length !== 1 || calls !== 0) {
+          // Keep the write boundary, but let a mistaken financial read recover
+          // through the read-only tool instead of demanding the same question again.
+          input.push(...output);
+          for (const item of requested) input.push({ type: 'function_call_output', call_id: item.call_id,
+            output: JSON.stringify({ error: 'Nenhuma operação foi encaminhada. cash_assistant exige chamada isolada antes de consultas. Para gastos realizados, totais, médias e listagens use cash_expenses. Se precisar de escrita após consultas, peça uma solicitação separada.' }) });
+          calls += requested.length;
+          if (calls > 8) throw new PublicError('A consulta excedeu o limite. Divida a pergunta em partes.');
+          continue;
+        }
         return this.cashMessage(message);
       }
       input.push(...output);
@@ -186,6 +206,7 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
           switch (item.name) {
             case 'cash_overview': result = await this.cash.query(message.sender, 'get_financial_overview', {}); break;
             case 'cash_due': result = await this.cash.query(message.sender, 'get_due_obligations', args); break;
+            case 'cash_expenses': result = await this.cash.query(message.sender, 'get_realized_expenses', args); break;
             case 'day_subjects': result = await this.day.subjects(message.sender, args); break;
             case 'calendar_events': result = await this.calendar.events(message.sender, args); break;
             case 'calendar_list': result = await this.calendar.calendars(message.sender); break;
