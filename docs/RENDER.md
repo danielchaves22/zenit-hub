@@ -122,6 +122,19 @@ Configure no Render do Hub:
 
 O Hub solicita `openid`, `email`, `calendar.events` (consulta, criação, alteração e exclusão de eventos) e `calendar.calendarlist.readonly`. Não solicita administração nem compartilhamento de agendas. Em modo de teste, inclua sua conta entre os usuários de teste. Para aplicativos externos em status Testing, o Google emite refresh tokens que expiram em sete dias com esses escopos; trate esse modo como piloto, não como configuração definitiva de uso diário. A publicação/verificação da tela de consentimento depende da configuração do projeto Google.
 
+#### Uso contínuo do Calendar
+
+- Em **Google Auth Platform > Público-alvo**, mantenha o tipo **Externo** e publique o aplicativo para mudar de **Em teste** para **Em produção**. Contas Gmail pessoais não podem usar um aplicativo restrito à organização Workspace.
+- Em **Acesso a dados**, declare somente `openid`, `https://www.googleapis.com/auth/userinfo.email`, `https://www.googleapis.com/auth/calendar.events` e `https://www.googleapis.com/auth/calendar.calendarlist.readonly`. `userinfo.email` é a representação do escopo `email` usado pelo Hub. O Hub não usa Gmail, `calendar.readonly` nem `calendar.freebusy`.
+- Mantenha a apresentação pública em `https://zenitapp.net/hub` e a política em `https://zenitapp.net/privacy`. A página de conexão informa o uso de dados de agenda pela OpenAI e pelo WhatsApp antes da autorização.
+- O modo de produção remove a regra de sete dias para novas autorizações. Após publicar, cada usuário deve enviar **conectar Calendar**, autorizar novamente no Google e confirmar **Conectar** no WhatsApp. Não é preciso desconectar antes: a conexão anterior é substituída apenas após a confirmação. Tokens emitidos durante o teste não devem ser considerados convertidos automaticamente.
+- O Hub já solicita `access_type=offline`, guarda o refresh token criptografado e renova o access token antes do vencimento durante o uso. Não se deve criar um cron para renovar consentimentos nem alterar `HUB_ENCRYPTION_KEY` ou o client ID nessa transição.
+- Produção não equivale a verificação pelo Google. Para uso pessoal por um grupo limitado, a exceção de verificação permite continuar com o aviso de aplicativo não verificado e o limite aplicável de usuários. Uma distribuição pública ampla exige a verificação de marca, dos escopos e dos domínios; isso pode exigir demonstração do fluxo e domínio próprio para o callback.
+- Publicar permite autorizações além da antiga lista de usuários de teste. Se for necessário limitar quem inicia conversas no Hub, configure `HUB_ALLOWED_SENDERS` explicitamente; a lista de teste do Google deixa de ser esse controle.
+- A autorização ainda pode ser revogada pelo usuário ou expirar por outras políticas do Google, inatividade ou limites de tokens. Nesses casos, o usuário precisa reconectar; “uso contínuo” não significa acesso irrevogável.
+
+Referências: [público e status de publicação](https://support.google.com/cloud/answer/15549945?hl=en), [exceção para uso pessoal](https://support.google.com/cloud/answer/13464323?hl=en) e [expiração de refresh tokens](https://developers.google.com/identity/protocols/oauth2#expiration).
+
 A migração 2 cria `calendar_drafts`, sem alterar dados das aplicações de origem. O pre-deploy já executa `npm run db:migrate`; não é preciso aplicar SQL manualmente. Preserve `HUB_ENCRYPTION_KEY`. Após atualizar, conexões antigas de Calendar devem ser autorizadas novamente para conceder escrita. No piloto, valide leitura, criação, edição e exclusão de um evento de teste, sempre revisando a prévia e usando o botão. Confira também cancelamento e clique repetido. Não use compromissos reais de terceiros para esses testes.
 
 ### Zenit Day
