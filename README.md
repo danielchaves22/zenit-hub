@@ -43,6 +43,7 @@ Os testes usam PostgreSQL local em base terminada em \_test, com schemas descart
 
 - [Arquitetura e responsabilidades](docs/ARQUITETURA.md)
 - [Conectores e permissões](docs/CONECTORES.md)
+- [Verificação Google e roteiro de demonstração](docs/GOOGLE_VERIFICATION.md)
 - [Notificações e assinaturas](docs/NOTIFICACOES.md)
 - [Publicação no Render](docs/RENDER.md) e [Blueprint](render.yaml)
 - [Operação, rollback e testes](docs/OPERACAO.md)
