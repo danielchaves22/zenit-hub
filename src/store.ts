@@ -97,12 +97,34 @@ export class Store {
         [hash, sender, this.vault.seal(data, `calendar:${hash}:${sender}`), Date.now() + 10 * 60_000]);
     });
   }
-  async claimCalendarDraft<T>(sender: string, token: string, approved: boolean): Promise<T | null> {
+  async pendingCalendarDraft<T>(sender: string, token?: string): Promise<{ token?: string; data: T } | null> {
+    const { rows } = await this.db.query(`SELECT data,hash FROM calendar_drafts WHERE sender=$1 AND state='pending' AND expires>$2${token ? ' AND hash=$3' : ''}`,
+      token ? [sender, Date.now(), digest(token)] : [sender, Date.now()]);
+    return rows[0] ? { token, data: this.vault.open<T>(rows[0].data, `calendar:${rows[0].hash}:${sender}`) } : null;
+  }
+  async replaceCalendarDraft<T>(sender: string, oldToken: string, token: string, revise: (data: T) => T) {
+    await transaction(this.db, async tx => {
+      await tx.query("SELECT sender FROM connections WHERE sender=$1 AND provider='calendar' FOR UPDATE", [sender]);
+      const hash = digest(oldToken);
+      const { rows } = await tx.query("SELECT data,expires FROM calendar_drafts WHERE hash=$1 AND sender=$2 AND state='pending' AND expires>$3 FOR UPDATE", [hash, sender, Date.now()]);
+      if (!rows[0]) throw new Error('Calendar draft expired or replaced');
+      const data = revise(this.vault.open<T>(rows[0].data, `calendar:${hash}:${sender}`));
+      await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE hash=$1", [hash]);
+      const nextHash = digest(token);
+      await tx.query('INSERT INTO calendar_drafts(hash,sender,data,expires) VALUES($1,$2,$3,$4)',
+        [nextHash, sender, this.vault.seal(data, `calendar:${nextHash}:${sender}`), rows[0].expires]);
+    });
+  }
+  async claimCalendarDraft<T>(sender: string, token: string, approved: boolean, validate?: (data: T) => void): Promise<T | null> {
     const hash = digest(token);
-    const { rows } = await this.db.query(`UPDATE calendar_drafts SET state=$1
-      WHERE hash=$2 AND sender=$3 AND state='pending' AND expires>$4 RETURNING data`,
-    [approved ? 'executing' : 'cancelled', hash, sender, Date.now()]);
-    return rows[0] ? this.vault.open<T>(rows[0].data, `calendar:${hash}:${sender}`) : null;
+    return transaction(this.db, async tx => {
+      const { rows } = await tx.query("SELECT data FROM calendar_drafts WHERE hash=$1 AND sender=$2 AND state='pending' AND expires>$3 FOR UPDATE", [hash, sender, Date.now()]);
+      if (!rows[0]) return null;
+      const data = this.vault.open<T>(rows[0].data, `calendar:${hash}:${sender}`);
+      if (approved) validate?.(data);
+      await tx.query('UPDATE calendar_drafts SET state=$1 WHERE hash=$2', [approved ? 'executing' : 'cancelled', hash]);
+      return data;
+    });
   }
   async calendarDraftResult(sender: string, token: string): Promise<{ state: string; reply: Reply | null } | null> {
     const { rows } = await this.db.query('SELECT state,result FROM calendar_drafts WHERE hash=$1 AND sender=$2', [digest(token), sender]);
@@ -203,6 +225,7 @@ export class Store {
   async prune() {
     await transaction(this.db, async tx => {
       await tx.query('DELETE FROM oauth_links WHERE expires<$1', [Date.now()]);
+      await tx.query('DELETE FROM guest_favorite_drafts WHERE expires<$1', [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM calendar_drafts WHERE expires<$1 AND state<>'executing'", [Date.now() - 30 * 86400_000]);
       await tx.query('DELETE FROM history WHERE created<$1', [Date.now() - 86400_000]);
       await tx.query("DELETE FROM inbox WHERE created<$1 AND state='done'", [Date.now() - 30 * 86400_000]);

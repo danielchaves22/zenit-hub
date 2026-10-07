@@ -1,0 +1,25 @@
+{
+  "version": "7.3",
+  "screens": [{
+    "id": "GUESTS",
+    "title": "Convidados do evento",
+    "terminal": true,
+    "success": true,
+    "data": {
+      "favorites": {
+        "type": "array",
+        "items": { "type": "object", "properties": {
+          "id": { "type": "string" }, "title": { "type": "string" }, "description": { "type": "string" }
+        } },
+        "__example__": [{ "id": "00000000-0000-4000-8000-000000000001", "title": "1. Ana (exemplo)", "description": "ana@example.com" }]
+      }
+    },
+    "layout": { "type": "SingleColumnLayout", "children": [{
+      "type": "Form", "name": "guests_form", "init-values": { "guest_ids": [] }, "children": [
+        { "type": "TextBody", "text": "Escolha quem deseja convidar. Deixe tudo desmarcado para criar sem convidados. Você ainda revisará o evento no chat antes de enviar os convites." },
+        { "type": "CheckboxGroup", "name": "guest_ids", "label": "Seus favoritos", "required": false, "data-source": "${data.favorites}" },
+        { "type": "Footer", "label": "Revisar evento", "on-click-action": { "name": "complete", "payload": { "guest_ids": "${form.guest_ids}" } } }
+      ]
+    }] }
+  }]
+}

@@ -28,6 +28,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
     allowedSenders: new Set((env.HUB_ALLOWED_SENDERS || '').split(',').map(s => s.trim()).filter(Boolean)),
     meta: { version: z.string().regex(/^v\d+\.\d+$/).parse(env.WHATSAPP_API_VERSION || 'v23.0'),
       phoneId: env.WHATSAPP_PHONE_NUMBER_ID || '', token: env.WHATSAPP_ACCESS_TOKEN || '',
+      guestsFlowId: z.string().regex(/^\d{1,128}$/).optional().parse(env.WHATSAPP_GUESTS_FLOW_ID || undefined),
       secret: env.WHATSAPP_APP_SECRET || '', verify: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '' },
     cash: { url: optionalOrigin('CASH_API_URL'), secret: env.CASH_HUB_SHARED_SECRET || '',
       bindingPrefix: env.CASH_BINDING_PREFIX || 'VINCULAR ZENIT', connectUrl: env.CASH_CONNECT_URL || '' },

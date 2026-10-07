@@ -4,12 +4,16 @@ import { equal, metaSignature } from './security.js';
 import type { Fetch, Incoming, Reply } from './types.js';
 import { jsonRequest } from './http.js';
 
+const flowResponse = z.object({ flow_token: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  guest_ids: z.array(z.string().uuid()).max(20) }).strict();
+
 const incomingSchema = z.object({ id: z.string().min(1).max(256), from: z.string().regex(/^[A-Za-z0-9_.-]{5,128}$/),
   timestamp: z.coerce.number().int().positive(), type: z.string(), text: z.object({ body: z.string().max(8000) }).optional(),
   audio: z.object({ id: z.string().regex(/^\d{1,128}$/) }).optional(),
   interactive: z.object({ button_reply: z.object({ id: z.string().min(1).max(256) }).optional(),
-    list_reply: z.object({ id: z.string().min(1).max(200) }).optional()
-  }).refine(value => !(value.button_reply && value.list_reply)).optional(),
+    list_reply: z.object({ id: z.string().min(1).max(200) }).optional(),
+    nfm_reply: z.object({ response_json: z.string().min(1).max(4000) }).optional()
+  }).refine(value => [value.button_reply, value.list_reply, value.nfm_reply].filter(Boolean).length <= 1).optional(),
   button: z.object({ payload: z.string().max(256) }).optional() });
 export class WhatsApp {
   constructor(readonly config: Config, private fetcher: Fetch = fetch) {}
@@ -27,9 +31,18 @@ export class WhatsApp {
         if (this.config.allowedSenders.size && !this.config.allowedSenders.has(message.from)) continue;
         // Ignore old replayed envelopes. A signed webhook does not include an expiry.
         if (Math.abs(Date.now() / 1000 - message.timestamp) > 86400) continue;
+        let flowReply: Incoming['flowReply'];
+        if (message.type === 'interactive' && message.interactive?.nfm_reply) {
+          try {
+            const parsed = flowResponse.parse(JSON.parse(message.interactive.nfm_reply.response_json));
+            if (new Set(parsed.guest_ids).size !== parsed.guest_ids.length) continue;
+            flowReply = { token: parsed.flow_token, guestIds: parsed.guest_ids };
+          } catch { continue; }
+        }
         messages.push({ id: message.id, sender: message.from, timestamp: message.timestamp,
           text: message.type === 'text' ? message.text?.body || '' : '',
           button: message.type === 'interactive' ? message.interactive?.button_reply?.id ?? message.interactive?.list_reply?.id : message.type === 'button' ? message.button?.payload : undefined,
+          ...(flowReply ? { flowReply } : {}),
           ...(message.type === 'audio' && message.audio ? { audio: { mediaId: message.audio.id } } : {}) });
       }
     }
@@ -61,6 +74,18 @@ export class WhatsApp {
   async send(sender: string, reply: Reply) {
     const token = this.config.meta.token;
     if (!token || !this.config.meta.phoneId) throw new Error('WhatsApp not configured');
+    if (reply.flow) {
+      const flow = reply.flow;
+      if (!this.config.meta.guestsFlowId || reply.list || reply.buttons || !reply.text.trim() || reply.text.length > 1024 ||
+        !/^[A-Za-z0-9_-]{43}$/.test(flow.token) || flow.favorites.length < 1 || flow.favorites.length > 20 ||
+        new Set(flow.favorites.map(f => f.id)).size !== flow.favorites.length ||
+        flow.favorites.some(f => !z.string().uuid().safeParse(f.id).success || !f.title.trim() || f.title.length > 30 || f.description.length > 300)) throw new Error('Invalid guest Flow');
+      await this.post(sender, { type: 'interactive', interactive: { type: 'flow', body: { text: reply.text }, action: { name: 'flow', parameters: {
+        flow_message_version: '3', flow_id: this.config.meta.guestsFlowId, flow_token: flow.token,
+        flow_cta: 'Escolher convidados', flow_action: 'navigate', flow_action_payload: { screen: 'GUESTS', data: { favorites: flow.favorites } }
+      } } } });
+      return;
+    }
     if (reply.list) {
       const list = reply.list;
       if (reply.buttons || !reply.text.trim() || reply.text.length > 1024 ||

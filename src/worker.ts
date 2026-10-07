@@ -18,7 +18,7 @@ export class Worker {
     const message = await this.store.nextMessage();
     if (message) {
       try {
-        const replies = message.text || message.button || message.audio
+        const replies = message.text || message.button || message.audio || message.flowReply
           ? await this.whatsapp.withTypingIndicator(message.id, () => this.assistant.handle(message))
           : [{ text: 'Envie texto ou uma mensagem de voz para consultar suas conexões.' }];
         await this.store.complete(message, replies);
