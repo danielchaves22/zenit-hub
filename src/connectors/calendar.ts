@@ -14,6 +14,7 @@ export class Calendar {
   openGuests(sender: string, token: string) { return this.writes.openGuests(sender, token); }
   selectGuests(sender: string, token: string, ids: unknown) { return this.writes.selectGuests(sender, token, ids); }
   selectGuestNames(sender: string, names: unknown) { return this.writes.selectGuestNames(sender, names); }
+  tryGuestNumbers(sender: string, numbers: string[]) { return this.writes.tryGuestNumbers(sender, numbers); }
   async events(sender: string, input: unknown) {
     const args = eventQuery.parse(input); const c = await this.oauth.connection(sender, 'calendar');
     const params = new URLSearchParams({ timeMin: args.start, timeMax: args.end, singleEvents: 'true', orderBy: 'startTime',

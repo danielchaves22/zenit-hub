@@ -180,3 +180,65 @@ test('natural-language favorite management and guest choice use Hub tools and pr
     assert.equal(calls, 3); assert.equal(writes.length, 1);
   } finally { await store.close(); }
 });
+
+test('numbered chat choice selects exactly the listed guests without AI and still requires the final button', async () => {
+  const { store, calendar, oauth, writes, add, localConfig } = await setup(false);
+  try {
+    await add('Ana', 'ana@example.com'); await add('Bruno', 'bruno@example.com'); await add('João', 'joao@example.com');
+    const assistant = new Assistant(localConfig, store, oauth, {} as any, new Day(oauth), calendar,
+      async () => { throw new Error('Numeric selection must not call AI'); });
+    const message = { id: 'wamid.numbers', sender: 'alice', text: '', timestamp: Date.now() / 1000 };
+    for (const answer of ['1 e 3', '1, 3', '1;3', '1 3']) {
+      const draft = await calendar.prepare('alice', create);
+      const [list] = await assistant.handle({ ...message, button: draft.buttons![0].id });
+      assert.match(list.text, /1\. Ana — ana@example.com\n2\. Bruno — bruno@example.com\n3\. João — joao@example.com/);
+      const [preview] = await assistant.handle({ ...message, text: answer });
+      assert.match(preview.text, /ana@example.com/); assert.match(preview.text, /joao@example.com/);
+      assert(!preview.text.includes('bruno@example.com')); assert.equal(writes.length, 0);
+      await assistant.handle({ ...message, button: preview.buttons![1].id });
+    }
+    await calendar.prepare('alice', create);
+    const [preview] = await assistant.handle({ ...message, text: '2' });
+    assert.match(preview.text, /bruno@example.com/); assert.equal(writes.length, 0);
+    await assistant.handle({ ...message, button: preview.buttons![0].id });
+    assert.equal(writes.length, 1); assert.deepEqual(JSON.parse(writes[0].body).attendees, [{ email: 'bruno@example.com' }]);
+  } finally { await store.close(); }
+});
+
+test('number selection validates snapshot, range, duplicates and sender before preparing invitations', async () => {
+  const { store, calendar, writes, add } = await setup(false);
+  try {
+    await add('Ana', 'one@example.com'); await add('Ana', 'two@example.com');
+    assert.equal(await calendar.tryGuestNumbers('alice', ['1']), null);
+    await calendar.prepare('alice', create);
+    assert.equal(await calendar.tryGuestNumbers('bob', ['1']), null);
+    for (const numbers of [['0'], ['3'], ['1', '3'], ['99999999999999999999999']]) {
+      await assert.rejects(calendar.tryGuestNumbers('alice', numbers), /Escolha números de 1 a 2/);
+    }
+    await assert.rejects(calendar.selectGuestNames('alice', ['Ana']), /mais de um/);
+    const valid = await calendar.tryGuestNumbers('alice', ['2', '02', '2']);
+    assert(valid); assert.match(valid.text, /two@example.com/); assert(!valid.text.includes('one@example.com'));
+    assert.equal(await calendar.tryGuestNumbers('alice', ['1']), null);
+    await calendar.confirm('alice', token(valid), true);
+    assert.deepEqual(JSON.parse(writes[0].body).attendees, [{ email: 'two@example.com' }]);
+    await calendar.prepare('alice', create); await add('Terceira', 'third@example.com');
+    await assert.rejects(calendar.tryGuestNumbers('alice', ['1']), /favoritos mudaram/);
+    assert.equal(writes.length, 1);
+  } finally { await store.close(); }
+});
+
+test('number routing leaves amounts and dates alone and does not capture Cash replies without a pending guest selection', async () => {
+  const { store, calendar, oauth, add, localConfig } = await setup(false);
+  try {
+    await add('Ana', 'ana@example.com');
+    const received: string[] = [];
+    const assistant = new Assistant(localConfig, store, oauth, { connected: async () => true, message: async (m: {text:string}) => {
+      received.push(m.text); return [{ text: 'Resposta Cash' }];
+    } } as any, new Day(oauth), calendar, async () => { throw new Error('Must route directly to Cash'); });
+    await store.disconnect('alice', 'calendar');
+    for (const text of ['1', '1 e 3', '23/12', '20h30', 'R$ 1,30', '1.30', 'Gastei 10']) {
+      assert.equal((await assistant.handle({ id: 'wamid.cash', sender: 'alice', text, timestamp: Date.now() / 1000 }))[0].text, 'Resposta Cash');
+    }
+    assert.equal(received.length, 7);
+  } finally { await store.close(); }
+});

@@ -13,7 +13,9 @@ Há um limite de 20 favoritos por usuário, sem e-mails duplicados (comparação
 
 Ao criar um evento, se houver favoritos, o Hub oferece **Escolher convidados**, **Sem convidados** e **Cancelar**. Sem favoritos, mantém a confirmação normal. Se a pessoa ainda não está cadastrada, cadastre-a antes de criar o evento.
 
-Com o Flow publicado/configurado, **Escolher convidados** abre checkboxes dentro do WhatsApp, inicialmente desmarcados. **Revisar evento** devolve a seleção ao Hub. Sem Flow, a lista aparece no chat e o usuário responde com nomes ou e-mails (por exemplo, `Ana e João`), ou `sem convidados`.
+Com o Flow publicado/configurado, **Escolher convidados** abre checkboxes dentro do WhatsApp, inicialmente desmarcados. **Revisar evento** devolve a seleção ao Hub. Sem Flow, aparece uma lista numerada com nome e e-mail de cada favorito. O usuário pode responder `1`, `1 e 3`, `1, 2, 3`, nomes (por exemplo, `Ana e João`), e-mails ou `sem convidados`.
+
+Respostas contendo apenas números separados por vírgula, ponto e vírgula, espaços ou `e` são tratadas diretamente pelo Hub, sem chamada à IA, enquanto o evento aguarda convidados. Os números correspondem à cópia da lista guardada nesse rascunho, não à ordem de contatos inferida pelo modelo. Números fora da lista são rejeitados sem mudar o rascunho; escolhas repetidas são consideradas uma única vez. As opções continuam sujeitas à revisão dos favoritos e ao prazo do evento. Isso não é uma lista interativa de múltipla seleção da Meta: são números enviados como texto na conversa.
 
 Nos dois caminhos, uma nova prévia mostra os e-mails escolhidos; somente **Criar e convidar** grava o evento e solicita ao Google o envio dos convites (`sendUpdates=all`). Não há garantia de entrega do e-mail pela API de criação. A seleção vazia cria sem convidados após **Criar evento**. Texto ou voz nunca substituem o botão final. Alterar participantes de eventos já existentes continua sendo feito no Google Calendar.
 

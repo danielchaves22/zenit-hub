@@ -19,6 +19,13 @@ export function resolveFavorite(items: Favorite[], target: string) {
   return found[0];
 }
 
+// Accept only standalone choices; dates, amounts and sentences stay in normal routing.
+export function guestNumberChoices(text: string): string[] | null {
+  const value = text.trim();
+  if (!/^\d+(?:(?:\s*[,;]\s*|\s+e\s+|\s+)\d+)*$/i.test(value)) return null;
+  return value.match(/\d+/g)!;
+}
+
 export class Guests {
   constructor(private store: Store) {}
   async list(sender: string): Promise<Collection> {
@@ -27,7 +34,7 @@ export class Guests {
   }
   async listing(sender: string): Promise<Reply> {
     const { items } = await this.list(sender);
-    return { text: `Convidados favoritos do Hub${items.length ? '\n' + items.map(f => `• ${f.name} — ${f.email}`).join('\n') : '\nVocê ainda não tem favoritos.'}\n\nPara cadastrar: "Salve Ana, ana@example.com, como convidada favorita". Você também pode pedir para alterar ou remover um favorito. Até 20 favoritos; nenhum convite é enviado ao cadastrar.` };
+    return { text: `Convidados favoritos do Hub${items.length ? '\n' + items.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n') : '\nVocê ainda não tem favoritos.'}\n\nPara cadastrar: "Salve Ana, ana@example.com, como convidada favorita". Você também pode pedir para alterar ou remover um favorito. Até 20 favoritos; nenhum convite é enviado ao cadastrar.` };
   }
   async prepare(sender: string, input: unknown): Promise<Reply> {
     const q = favoriteChange.parse(input); const current = await this.list(sender);

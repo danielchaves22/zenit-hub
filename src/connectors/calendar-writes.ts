@@ -154,7 +154,7 @@ export class CalendarWrites {
   }
   async openGuests(sender: string, token: string): Promise<Reply> {
     const draft = await this.choosing(sender, token); const favorites = draft.guests!.favorites;
-    if (!this.oauth.config.meta.guestsFlowId) return { text: `Convidados favoritos\n${favorites.map(f => `• ${f.name} — ${f.email}`).join('\n')}\n\nResponda com os nomes ou e-mails desejados, ou "sem convidados". Depois você revisará o evento antes de criar e enviar os convites.`,
+    if (!this.oauth.config.meta.guestsFlowId) return { text: `Convidados favoritos\n${favorites.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n')}\n\nResponda com os números (por exemplo, "1", "1 e 3" ou "1, 2, 3"), nomes ou e-mails desejados, ou "sem convidados". Depois você revisará o evento antes de criar e enviar os convites.`,
       buttons: [{ id: `hub:calendar:none:${token}`, title: 'Sem convidados' }, { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }] };
     return { text: 'Marque os convidados deste evento. Ao continuar, você receberá uma prévia para confirmar a criação e os convites. Nenhum favorito vem marcado. Para não convidar ninguém, continue sem marcar opções.',
       flow: { token, favorites: favorites.map((f, i) => ({ id: f.id, title: `${i + 1}. ${f.name}`.slice(0, 30), description: f.email })) } };
@@ -162,7 +162,19 @@ export class CalendarWrites {
   async selectGuestNames(sender: string, input: unknown): Promise<Reply> {
     const names = z.array(z.string().trim().min(1).max(254)).max(20).parse(input);
     const draft = await this.choosing(sender);
-    return this.selectGuests(sender, draft.guests!.token, names.map(n => resolveFavorite(draft.guests!.favorites, n).id));
+    const favorites = draft.guests!.favorites;
+    const ids = names.map(n => {
+      if (!/^\d+$/.test(n)) return resolveFavorite(favorites, n).id;
+      const index = Number(n) - 1;
+      if (!Number.isSafeInteger(index) || index < 0 || index >= favorites.length) throw new PublicError(`Escolha números de 1 a ${favorites.length}, conforme a lista deste evento, ou envie "sem convidados".`);
+      return favorites[index].id;
+    });
+    return this.selectGuests(sender, draft.guests!.token, [...new Set(ids)]);
+  }
+  async tryGuestNumbers(sender: string, numbers: string[]): Promise<Reply | null> {
+    const pending = await this.oauth.store.pendingCalendarDraft<Draft>(sender);
+    if (pending?.data.guests?.stage !== 'choose') return null;
+    return this.selectGuestNames(sender, numbers);
   }
   async selectGuests(sender: string, token: string, input: unknown): Promise<Reply> {
     const ids = z.array(z.string().uuid()).max(20).parse(input);
