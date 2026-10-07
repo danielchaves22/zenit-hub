@@ -8,6 +8,7 @@ Backend de conexões para conversar com Cash, Day e Google Calendar pelo WhatsAp
 - Consulta de assuntos do Day e gestão de lembretes com autorização adicional.
 - Consulta, criação, alteração e exclusão de eventos comuns no Calendar, com prévia e confirmação.
 - Texto e voz pelo mesmo fluxo; transcrição única no Hub.
+- Lista de categorias do Cash quando mais de uma opção for adequada. A escolha completa o rascunho; o lançamento exige o botão Confirmar atualizado.
 - Catálogo de notificações, resumo diário e lembretes do Day, com assinatura explícita e templates configurados/aprovados.
 
 Veja os [guias públicos](https://zenitapp.net/docs/help/zenit-hub/getting-started/) para uso. Conectar uma aplicação não ativa notificações automaticamente.

@@ -82,8 +82,9 @@ export class Assistant {
   private async cashMessage(message: Incoming) {
     const replies = await this.cash.message(message);
     // Voice has already become text, so both formats share the same context.
-    await this.store.addHistory(message.sender, 'user', message.text || '[Resposta pelo botão do Cash]');
-    await this.store.addHistory(message.sender, 'assistant', replies.map(r => r.text).join('\n'));
+    await this.store.addHistory(message.sender, 'user', message.text || '[Resposta interativa do Cash]');
+    await this.store.addHistory(message.sender, 'assistant', replies.map(r => [r.text,
+      ...(r.list?.rows.map(row => row.description || row.title) ?? [])].join('\n')).join('\n'));
     return replies;
   }
 

@@ -7,7 +7,9 @@ import { jsonRequest } from './http.js';
 const incomingSchema = z.object({ id: z.string().min(1).max(256), from: z.string().regex(/^[A-Za-z0-9_.-]{5,128}$/),
   timestamp: z.coerce.number().int().positive(), type: z.string(), text: z.object({ body: z.string().max(8000) }).optional(),
   audio: z.object({ id: z.string().regex(/^\d{1,128}$/) }).optional(),
-  interactive: z.object({ button_reply: z.object({ id: z.string().max(256) }).optional() }).optional(),
+  interactive: z.object({ button_reply: z.object({ id: z.string().min(1).max(256) }).optional(),
+    list_reply: z.object({ id: z.string().min(1).max(200) }).optional()
+  }).refine(value => !(value.button_reply && value.list_reply)).optional(),
   button: z.object({ payload: z.string().max(256) }).optional() });
 export class WhatsApp {
   constructor(readonly config: Config, private fetcher: Fetch = fetch) {}
@@ -27,7 +29,7 @@ export class WhatsApp {
         if (Math.abs(Date.now() / 1000 - message.timestamp) > 86400) continue;
         messages.push({ id: message.id, sender: message.from, timestamp: message.timestamp,
           text: message.type === 'text' ? message.text?.body || '' : '',
-          button: message.type === 'interactive' ? message.interactive?.button_reply?.id : message.type === 'button' ? message.button?.payload : undefined,
+          button: message.type === 'interactive' ? message.interactive?.button_reply?.id ?? message.interactive?.list_reply?.id : message.type === 'button' ? message.button?.payload : undefined,
           ...(message.type === 'audio' && message.audio ? { audio: { mediaId: message.audio.id } } : {}) });
       }
     }
@@ -59,6 +61,17 @@ export class WhatsApp {
   async send(sender: string, reply: Reply) {
     const token = this.config.meta.token;
     if (!token || !this.config.meta.phoneId) throw new Error('WhatsApp not configured');
+    if (reply.list) {
+      const list = reply.list;
+      if (reply.buttons || !reply.text.trim() || reply.text.length > 1024 ||
+          !list.button.trim() || list.button.length > 20 || list.rows.length < 1 || list.rows.length > 10 ||
+          new Set(list.rows.map(row => row.id)).size !== list.rows.length ||
+          list.rows.some(row => !row.id.trim() || row.id.length > 200 || !row.title.trim() ||
+            row.title.length > 24 || (row.description?.length ?? 0) > 72)) throw new Error('Invalid list');
+      await this.post(sender, { type: 'interactive', interactive: { type: 'list', body: { text: reply.text },
+        action: { button: list.button, sections: [{ rows: list.rows }] } } });
+      return;
+    }
     const chunks = reply.text.match(/[\s\S]{1,3500}/gu) || ['Sem resposta.'];
     if (reply.buttons && (reply.buttons.length > 3 || reply.buttons.some(b => b.id.length > 256 || b.title.length > 20))) throw new Error('Invalid buttons');
     if (reply.buttons && reply.text.length <= 1024) {

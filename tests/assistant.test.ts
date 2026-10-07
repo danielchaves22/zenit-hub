@@ -25,6 +25,22 @@ test('existing Cash-only conversations require no additional model call and pres
     assert.deepEqual(await assistant.handle(message), replies); assert.equal(modelCalls, 0);
   } finally { (await store.close()); }
 });
+
+test('category list selections route directly to Cash without AI and respect a disconnected Cash', async () => {
+  const store = await createTestStore(config.key);
+  try {
+    const selected = { ...message, text: '', button: 'zenit:category:42:1791288000000:8' };
+    let calls = 0;
+    const oauth = new OAuth(config, store);
+    const assistant = new Assistant(config, store, oauth, { message: async (incoming: unknown) => {
+      assert.deepEqual(incoming, selected); calls++; return [{ text: 'Revise antes de confirmar' }];
+    } } as any, new Day(oauth), new Calendar(oauth), async () => { throw new Error('Must not call AI'); });
+    assert.equal((await assistant.handle(selected))[0].text, 'Revise antes de confirmar');
+    await store.disableCash(message.sender, true);
+    await assert.rejects(assistant.handle(selected), /Cash/);
+    assert.equal(calls, 1);
+  } finally { await store.close(); }
+});
 test('cross-application questions query connected tools with server-owned identity; credentials stay out of model context', async () => {
   const store = (await createTestStore(config.key)); (await connection(store, 'day')); (await connection(store, 'calendar'));
   try {
