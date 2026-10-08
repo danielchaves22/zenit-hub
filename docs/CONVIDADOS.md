@@ -17,7 +17,19 @@ Com o Flow publicado/configurado, **Escolher convidados** abre checkboxes dentro
 
 Respostas contendo apenas números separados por vírgula, ponto e vírgula, espaços ou `e` são tratadas diretamente pelo Hub, sem chamada à IA, enquanto o evento aguarda convidados. Os números correspondem à cópia da lista guardada nesse rascunho, não à ordem de contatos inferida pelo modelo. Números fora da lista são rejeitados sem mudar o rascunho; escolhas repetidas são consideradas uma única vez. As opções continuam sujeitas à revisão dos favoritos e ao prazo do evento. Isso não é uma lista interativa de múltipla seleção da Meta: são números enviados como texto na conversa.
 
-Nos dois caminhos, uma nova prévia mostra os e-mails escolhidos; somente **Criar e convidar** grava o evento e solicita ao Google o envio dos convites (`sendUpdates=all`). Não há garantia de entrega do e-mail pela API de criação. A seleção vazia cria sem convidados após **Criar evento**. Texto ou voz nunca substituem o botão final. Alterar participantes de eventos já existentes continua sendo feito no Google Calendar.
+Nos dois caminhos, uma nova prévia mostra os e-mails escolhidos; somente **Criar e convidar** grava o evento e solicita ao Google o envio dos convites (`sendUpdates=all`). Não há garantia de entrega do e-mail pela API. A seleção vazia cria sem convidados após **Criar evento**. Texto ou voz nunca substituem o botão final.
+
+## Adicionar convidados a eventos existentes
+
+- `Adicione Ana à reunião de amanhã`: consulta o evento e resolve Ana pelos favoritos; nomes ou eventos ambíguos exigem esclarecimento.
+- `Inclua bruno@example.com no Show Crossroads de 23/12/2026`: aceita um e-mail explícito, sem cadastrá-lo automaticamente como favorito.
+- `Quero adicionar convidados à reunião de amanhã`: identifica o evento e abre a escolha. Toque em **Escolher convidados** para ver a lista e responder, por exemplo, `1 e 3`.
+
+A prévia identifica o evento, a data, a agenda, os participantes atuais e os novos convidados. Somente **Adicionar e convidar** aplica a inclusão. E-mails já presentes são ignorados sem diferenciar maiúsculas; se todos já participam, nenhum convite é enviado e o Hub pede outra seleção ou cancelamento. Seleção vazia/`sem convidados` cancela a inclusão, sem remover participantes.
+
+Nesta etapa, a inclusão é permitida somente na cópia da agenda organizadora, com permissão de edição e lista completa de participantes. Pode ser usada em uma ocorrência recorrente com data específica; a série inteira, eventos especiais, remoção/substituição de participantes e eventos de outro organizador continuam no Google Calendar. Não há novos escopos OAuth, alteração na Meta ou migração de banco para esta ampliação.
+
+`calendar_add_guests` exige um ID consultado por `calendar_events` na mesma solicitação. O rascunho guarda a lista completa de participantes, suas respostas e o ETag do evento. Na confirmação, o PATCH inclui os participantes anteriores mais os novos e-mails, preservando os demais campos do evento. `If-Match` impede sobrescrever alterações posteriores à prévia. `sendUpdates=all` solicita os convites e pode notificar também os convidados atuais; o Hub não promete entrega individual. Uma resposta incerta não é repetida automaticamente.
 
 ## Persistência e segurança
 
@@ -41,8 +53,8 @@ Em 07/10/2026, o Flow `zenit_hub_calendar_guests_v1`, ID `2420131695459275`, foi
 
 ## Testes e operação
 
-`npm run check` usa PostgreSQL local e APIs simuladas. Cobre isolamento, cifragem, capacidade, duplicidade, ambiguidades, confirmações concorrentes, tokens expirados/substituídos, troca de conta, seleção vazia, convidados desconhecidos, webhook assinado e ausência de escrita antes da confirmação. `npm run build` verifica a compilação de produção.
+`npm run check` usa PostgreSQL local e APIs simuladas. Cobre isolamento, cifragem, capacidade, duplicidade, ambiguidades, confirmações concorrentes, tokens expirados/substituídos, troca de conta, seleção vazia, convidados desconhecidos, webhook assinado e ausência de escrita antes da confirmação. A inclusão em eventos existentes também cobre preservação de RSVP/metadados, deduplicação com convidados atuais, lista incompleta, permissão de organizador, conflito de ETag, resposta incerta e exigência de consulta atual do evento. `npm run build` verifica a compilação de produção.
 
 Após a migração 4, versões anteriores que exigem exatamente schema 3 não iniciam. Para desativar somente o Flow, remova a variável e faça novo deploy; não reverta o banco nem remova favoritos. Um rollback de código precisa continuar aceitando schema 4 ou usar restauração planejada do banco.
 
-Referências: [Flows da Meta](https://developers.facebook.com/docs/whatsapp/flows/), [criação de eventos Google](https://developers.google.com/workspace/calendar/api/v3/reference/events/insert).
+Referências: [Flows da Meta](https://developers.facebook.com/docs/whatsapp/flows/), [criação de eventos Google](https://developers.google.com/workspace/calendar/api/v3/reference/events/insert), [PATCH e envio de atualizações](https://developers.google.com/workspace/calendar/api/v3/reference/events/patch), [campos de participantes](https://developers.google.com/workspace/calendar/api/v3/reference/events).

@@ -7,7 +7,7 @@ Backend de conexões para conversar com Cash, Day e Google Calendar pelo WhatsAp
 - Consultas financeiras, inclusive gastos realizados com filtros, totais e média mensal; escritas continuam no fluxo confirmado do Cash.
 - Consulta de assuntos do Day e gestão de lembretes com autorização adicional.
 - Consulta, criação, alteração e exclusão de eventos comuns no Calendar, com prévia e confirmação.
-- Convidados favoritos pessoais no Hub, geridos pelo WhatsApp; seleção ao criar eventos e envio de convites somente após confirmação. Seleção múltipla via Flow quando publicado/configurado, ou nomes pelo chat.
+- Convidados favoritos pessoais no Hub, geridos pelo WhatsApp; seleção ao criar eventos e inclusão em eventos existentes da agenda organizadora, preservando participantes e respostas. Convites somente após confirmação. Seleção múltipla via Flow quando publicado/configurado, ou números/nomes pelo chat; a inclusão em eventos existentes também aceita e-mails informados diretamente.
 - Texto e voz pelo mesmo fluxo; transcrição única no Hub.
 - Lista de categorias do Cash quando mais de uma opção for adequada. A escolha completa o rascunho; o lançamento exige o botão Confirmar atualizado.
 - Catálogo de notificações, resumo diário e lembretes do Day, com assinatura explícita e templates configurados/aprovados.

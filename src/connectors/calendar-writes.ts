@@ -6,6 +6,10 @@ import { PublicError, type Connection, type Fetch, type Reply } from '../types.j
 import { Guests, resolveFavorite, type Favorite } from '../guests.js';
 
 const calendarId = z.string().min(1).max(512);
+export const eventGuestAddition = z.object({
+  calendarId, eventId: z.string().regex(/^[a-zA-Z0-9_-]{5,1024}$/),
+  names: z.array(z.string().trim().min(1).max(254)).min(1).max(20).nullable()
+}).strict();
 export const eventChange = z.object({
   operation: z.enum(['create', 'update', 'delete']), calendarId,
   eventId: z.string().regex(/^[a-zA-Z0-9_-]{5,1024}$/).nullable(), title: z.string().trim().min(1).max(300).nullable(),
@@ -15,14 +19,16 @@ export const eventChange = z.object({
   reminderMinutes: z.array(z.number().int().min(0).max(40320)).max(5).nullable()
 }).strict();
 type EventTime = { date?: string | null; dateTime?: string | null; timeZone?: string | null };
+type Attendee = { email?: string; displayName?: string; responseStatus?: string; optional?: boolean;
+  resource?: boolean; comment?: string; additionalGuests?: number; asyncOperation?: string; [key: string]: unknown };
 type Event = { id: string; etag: string; summary?: string; description?: string; location?: string;
   start: EventTime; end: EventTime; status?: string; recurrence?: string[]; recurringEventId?: string;
-  eventType?: string; attendees?: { email?: string }[]; attendeesOmitted?: boolean;
+  eventType?: string; attendees?: Attendee[]; attendeesOmitted?: boolean;
   organizer?: { self?: boolean; email?: string }; reminders?: { useDefault: boolean; overrides?: { method: string; minutes: number }[] } };
 type Patch = Partial<Pick<Event, 'summary' | 'description' | 'location' | 'start' | 'end' | 'reminders' | 'attendees'>>;
 type Draft = { operation: 'create' | 'update' | 'delete'; accountId: string; grant: string;
   calendarId: string; eventId: string; etag?: string; patch: Patch; preview: string;
-  guests?: { stage: 'choose' | 'review'; token: string; revision: number; favorites: Favorite[] } };
+  guests?: { stage: 'choose' | 'review'; token: string; revision: number; favorites: Favorite[]; existingAttendees?: Attendee[] } };
 class CalendarError extends PublicError {
   constructor(readonly status: number) {
     super(status === 412 ? 'O evento mudou no Google depois da prévia. Consulte novamente e revise uma nova confirmação.'
@@ -77,6 +83,15 @@ export class CalendarWrites {
     return c;
   }
   async prepare(sender: string, input: unknown): Promise<Reply> {
+    return this.prepareChange(sender, input);
+  }
+  async prepareGuestAddition(sender: string, input: unknown): Promise<Reply> {
+    const q = eventGuestAddition.parse(input);
+    const reply = await this.prepareChange(sender, { operation: 'update', calendarId: q.calendarId, eventId: q.eventId,
+      title: null, description: null, location: null, start: null, end: null, allDay: null, timingEvidence: null, reminderMinutes: null }, true);
+    return q.names === null ? reply : this.selectGuestNames(sender, q.names);
+  }
+  private async prepareChange(sender: string, input: unknown, addGuests = false): Promise<Reply> {
     const q = eventChange.parse(input); const c = await this.writable(sender);
     const calendar = await this.request(c, `/users/me/calendarList/${encodeURIComponent(q.calendarId)}`);
     if (!['owner', 'writer'].includes(calendar.accessRole)) throw new PublicError('Sua conta só pode consultar esta agenda. Escolha uma agenda com permissão de edição.');
@@ -91,6 +106,10 @@ export class CalendarWrites {
       if (before.recurrence?.length) throw new PublicError('Para eventos recorrentes, indique uma ocorrência com data. Alterar a série inteira ainda deve ser feito no Google Calendar.');
       if (before.eventType && before.eventType !== 'default') throw new PublicError('Este é um evento especial do Google. Edite-o diretamente no Calendar.');
       if (before.attendeesOmitted) throw new PublicError('Não foi possível conferir todos os convidados. Revise este evento diretamente no Google Calendar.');
+      if (addGuests) {
+        if (!before.organizer?.self) throw new PublicError('Por enquanto, o Hub adiciona convidados somente em eventos organizados por esta agenda. Para este evento, use o Google Calendar ou a agenda organizadora.');
+        if (before.attendees?.some(a => !a.email || a.asyncOperation)) throw new PublicError('Não foi possível conferir a lista completa de convidados. Revise este evento diretamente no Google Calendar.');
+      }
     }
     const fields = [q.title, q.description, q.location, q.start, q.end, q.allDay, q.reminderMinutes];
     if (q.operation === 'delete' && fields.some(v => v !== null)) throw new PublicError('Para excluir, envie somente a identificação do evento.');
@@ -107,13 +126,13 @@ export class CalendarWrites {
         if (q.operation === 'create') Object.assign(patch, range);
       }
       if (q.reminderMinutes !== null) patch.reminders = { useDefault: false, overrides: [...new Set(q.reminderMinutes)].map(minutes => ({ method: 'popup', minutes })) };
-      if (!Object.keys(patch).length) throw new PublicError('Informe o que deseja alterar no evento.');
+      if (!Object.keys(patch).length && !addGuests) throw new PublicError('Informe o que deseja alterar no evento.');
     }
     const after = { ...before, ...patch } as Event;
-    const action = q.operation === 'create' ? 'Criar evento' : q.operation === 'update' ? 'Alterar evento' : 'Excluir evento desta agenda';
+    const action = addGuests ? 'Adicionar convidados' : q.operation === 'create' ? 'Criar evento' : q.operation === 'update' ? 'Alterar evento' : 'Excluir evento desta agenda';
     const lines = [`Google Calendar — ${action}`, `Conta: ${plain(c.label)}`, `Agenda: ${plain(calendar.summary || target)}`];
     if (before) lines.push(`Evento atual: ${plain(before.summary || '(sem título)')}`, when(before, this.oauth.config.timeZone));
-    if (q.operation !== 'delete') {
+    if (q.operation !== 'delete' && !addGuests) {
       lines.push(`${before ? 'Após a alteração' : 'Título'}: ${plain(after.summary || '(sem título)')}`, when(after, this.oauth.config.timeZone));
       if ('location' in patch) lines.push(`Local: ${patch.location || '(remover)'}`);
       if ('description' in patch) lines.push(`Descrição: ${patch.description || '(remover)'}`);
@@ -123,7 +142,7 @@ export class CalendarWrites {
     if (before?.recurringEventId) lines.push('Somente esta ocorrência; as outras datas permanecem como estão.');
     if (before?.attendees?.length) {
       lines.push(`Convidados: ${before.attendees.map(a => a.email || '(sem e-mail)').join(', ')}`);
-      lines.push(before.organizer?.self ? 'O Google poderá notificar os convidados desta alteração ou exclusão.' : 'Evento de outro organizador: a operação será feita na sua cópia; o Google poderá enviar notificações.');
+      if (!addGuests) lines.push(before.organizer?.self ? 'O Google poderá notificar os convidados desta alteração ou exclusão.' : 'Evento de outro organizador: a operação será feita na sua cópia; o Google poderá enviar notificações.');
     }
     lines.push('Confirme pelo botão em até 10 minutos. Nada foi gravado ainda.');
     const preview = lines.join('\n');
@@ -131,11 +150,16 @@ export class CalendarWrites {
     const token = randomToken();
     const draft: Draft = { operation: q.operation, accountId: c.accountId, grant: grant(c), calendarId: target,
       eventId: q.eventId || randomUUID().replaceAll('-', ''), etag: before?.etag, patch, preview };
-    if (q.operation === 'create') {
+    if (q.operation === 'create' || addGuests) {
       const favorites = await new Guests(this.oauth.store).list(sender);
-      if (favorites.items.length) draft.guests = { stage: 'choose', token, revision: favorites.revision, favorites: favorites.items };
+      if (favorites.items.length || addGuests) draft.guests = { stage: 'choose', token, revision: favorites.revision, favorites: favorites.items,
+        ...(addGuests ? { existingAttendees: before!.attendees || [] } : {}) };
     }
     await this.oauth.store.calendarDraft(sender, token, draft);
+    if (addGuests) return { text: `${preview}\n\nEscolha os favoritos ou informe os e-mails que deseja adicionar. Os participantes atuais serão mantidos.`, buttons: [
+      ...(draft.guests!.favorites.length ? [{ id: `hub:calendar:guests:${token}`, title: 'Escolher convidados' }] : []),
+      { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }
+    ] };
     if (draft.guests) return { text: `${preview}\n\nDeseja adicionar convidados favoritos? Escolha antes de confirmar a criação.`, buttons: [
       { id: `hub:calendar:guests:${token}`, title: 'Escolher convidados' },
       { id: `hub:calendar:none:${token}`, title: 'Sem convidados' },
@@ -154,22 +178,27 @@ export class CalendarWrites {
   }
   async openGuests(sender: string, token: string): Promise<Reply> {
     const draft = await this.choosing(sender, token); const favorites = draft.guests!.favorites;
-    if (!this.oauth.config.meta.guestsFlowId) return { text: `Convidados favoritos\n${favorites.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n')}\n\nResponda com os números (por exemplo, "1", "1 e 3" ou "1, 2, 3"), nomes ou e-mails desejados, ou "sem convidados". Depois você revisará o evento antes de criar e enviar os convites.`,
-      buttons: [{ id: `hub:calendar:none:${token}`, title: 'Sem convidados' }, { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }] };
-    return { text: 'Marque os convidados deste evento. Ao continuar, você receberá uma prévia para confirmar a criação e os convites. Nenhum favorito vem marcado. Para não convidar ninguém, continue sem marcar opções.',
+    const adding = draft.guests!.existingAttendees !== undefined;
+    if (!this.oauth.config.meta.guestsFlowId || !favorites.length) return { text: `Convidados favoritos\n${favorites.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n') || 'Nenhum favorito cadastrado.'}\n\nResponda com os números (por exemplo, "1", "1 e 3" ou "1, 2, 3"), nomes ou e-mails desejados, ou "sem convidados". Depois você revisará o evento antes de ${adding ? 'adicionar e enviar os convites. Os participantes atuais serão mantidos; você também pode informar um e-mail não cadastrado' : 'criar e enviar os convites'}.`,
+      buttons: [...(!adding ? [{ id: `hub:calendar:none:${token}`, title: 'Sem convidados' }] : []), { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }] };
+    return { text: `Marque os convidados deste evento. Ao continuar, você receberá uma prévia para confirmar ${adding ? 'a inclusão e os convites. Os participantes atuais serão mantidos' : 'a criação e os convites'}. Nenhum favorito vem marcado. ${adding ? 'Continuar sem marcar opções cancela esta inclusão.' : 'Para não convidar ninguém, continue sem marcar opções.'}`,
       flow: { token, favorites: favorites.map((f, i) => ({ id: f.id, title: `${i + 1}. ${f.name}`.slice(0, 30), description: f.email })) } };
   }
   async selectGuestNames(sender: string, input: unknown): Promise<Reply> {
     const names = z.array(z.string().trim().min(1).max(254)).max(20).parse(input);
     const draft = await this.choosing(sender);
     const favorites = draft.guests!.favorites;
-    const ids = names.map(n => {
-      if (!/^\d+$/.test(n)) return resolveFavorite(favorites, n).id;
+    const selected = names.map(n => {
+      if (draft.guests!.existingAttendees !== undefined && z.string().email().safeParse(n).success) {
+        const email = n.toLowerCase();
+        return favorites.find(f => f.email.toLowerCase() === email) || { id: randomUUID(), name: email, email };
+      }
+      if (!/^\d+$/.test(n)) return resolveFavorite(favorites, n);
       const index = Number(n) - 1;
       if (!Number.isSafeInteger(index) || index < 0 || index >= favorites.length) throw new PublicError(`Escolha números de 1 a ${favorites.length}, conforme a lista deste evento, ou envie "sem convidados".`);
-      return favorites[index].id;
+      return favorites[index];
     });
-    return this.selectGuests(sender, draft.guests!.token, [...new Set(ids)]);
+    return this.reviewGuests(sender, draft, [...new Map(selected.map(f => [f.email.toLowerCase(), f])).values()]);
   }
   async tryGuestNumbers(sender: string, numbers: string[]): Promise<Reply | null> {
     const pending = await this.oauth.store.pendingCalendarDraft<Draft>(sender);
@@ -185,16 +214,29 @@ export class CalendarWrites {
       if (!f) throw new PublicError('Convidado inválido para este pedido. Abra a seleção novamente.');
       return f;
     });
+    return this.reviewGuests(sender, draft, selected);
+  }
+  private async reviewGuests(sender: string, draft: Draft, selected: Favorite[]): Promise<Reply> {
+    const guests = draft.guests!; const token = guests.token;
+    const adding = guests.existingAttendees !== undefined;
+    if (adding && !selected.length) return this.confirm(sender, token, false);
+    const existing = guests.existingAttendees || [];
+    const emails = new Set(existing.map(a => a.email!.toLowerCase()));
+    const additions = selected.filter(f => !emails.has(f.email.toLowerCase()));
+    if (adding && !additions.length) throw new PublicError('Esses e-mails já participam do evento. Escolha outros convidados ou cancele a inclusão. Nenhum convite foi enviado.');
     const nextToken = randomToken();
-    const preview = `${draft.preview}\n\nConvidados: ${selected.length ? '\n' + selected.map(f => `• ${f.name} — ${f.email}`).join('\n') : 'nenhum.'}${selected.length ? '\nAo confirmar, o Google criará o evento e enviará os convites para estes e-mails.' : ''}`;
+    const preview = `${draft.preview}\n\n${adding ? 'Novos convidados' : 'Convidados'}: ${additions.length ? '\n' + additions.map(f => `• ${f.name} — ${f.email}`).join('\n') : 'nenhum.'}${additions.length ? (adding ? '\nAo confirmar, o Google adicionará estes e-mails e enviará os convites. Os participantes atuais e suas respostas serão preservados; eles também poderão receber uma atualização.' : '\nAo confirmar, o Google criará o evento e enviará os convites para estes e-mails.') : ''}${adding && additions.length < selected.length ? '\nE-mails que já participam não serão adicionados novamente.' : ''}`;
+    if (preview.length > 7000) throw new PublicError('A lista de convidados ficou grande demais para revisar no WhatsApp. Escolha menos convidados ou use o Google Calendar.');
     try {
       await this.oauth.store.replaceCalendarDraft<Draft>(sender, token, nextToken, current => {
         if (current.guests?.stage !== 'choose') throw new Error('Not selecting');
         return { ...current, guests: { ...guests, token: nextToken, stage: 'review' }, preview,
-          patch: { ...current.patch, attendees: selected.map(f => ({ email: f.email })) } };
+          // Google replaces arrays on PATCH. Keep the complete attendee objects,
+          // including RSVP/optional/resource metadata, guarded by the original ETag.
+          patch: { ...current.patch, attendees: [...existing, ...additions.map(f => ({ email: f.email }))] } };
       });
     } catch { throw new PublicError('A seleção expirou ou foi substituída. Faça o pedido novamente.'); }
-    return { text: preview, buttons: [{ id: `hub:calendar:confirm:${nextToken}`, title: selected.length ? 'Criar e convidar' : 'Criar evento' }, { id: `hub:calendar:cancel:${nextToken}`, title: 'Cancelar' }] };
+    return { text: preview, buttons: [{ id: `hub:calendar:confirm:${nextToken}`, title: adding ? 'Adicionar e convidar' : selected.length ? 'Criar e convidar' : 'Criar evento' }, { id: `hub:calendar:cancel:${nextToken}`, title: 'Cancelar' }] };
   }
   async confirm(sender: string, token: string, approved: boolean): Promise<Reply> {
     const store = this.oauth.store;
