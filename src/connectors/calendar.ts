@@ -10,6 +10,7 @@ export class Calendar {
   private writes: CalendarWrites;
   constructor(private oauth: OAuth, private fetcher: Fetch = fetch) { this.writes = new CalendarWrites(oauth, fetcher); }
   prepare(sender: string, input: unknown) { return this.writes.prepare(sender, input); }
+  prepareReschedule(sender: string, input: unknown) { return this.writes.prepareReschedule(sender, input); }
   prepareGuestAddition(sender: string, input: unknown) { return this.writes.prepareGuestAddition(sender, input); }
   confirm(sender: string, token: string, approved: boolean) { return this.writes.confirm(sender, token, approved); }
   openGuests(sender: string, token: string) { return this.writes.openGuests(sender, token); }

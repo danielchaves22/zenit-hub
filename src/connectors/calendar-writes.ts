@@ -4,8 +4,12 @@ import { OAuth } from '../oauth.js';
 import { digest, randomToken } from '../security.js';
 import { PublicError, type Connection, type Fetch, type Reply } from '../types.js';
 import { Guests, resolveFavorite, type Favorite } from '../guests.js';
+import { rescheduleEvent } from '../calendar-reschedule.js';
 
 const calendarId = z.string().min(1).max(512);
+export const eventReschedule = z.object({
+  calendarId, eventId: z.string().regex(/^[a-zA-Z0-9_-]{5,1024}$/), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+}).strict();
 export const eventGuestAddition = z.object({
   calendarId, eventId: z.string().regex(/^[a-zA-Z0-9_-]{5,1024}$/),
   names: z.array(z.string().trim().min(1).max(254)).min(1).max(20).nullable()
@@ -85,13 +89,18 @@ export class CalendarWrites {
   async prepare(sender: string, input: unknown): Promise<Reply> {
     return this.prepareChange(sender, input);
   }
+  async prepareReschedule(sender: string, input: unknown): Promise<Reply> {
+    const q = eventReschedule.parse(input);
+    return this.prepareChange(sender, { operation: 'update', calendarId: q.calendarId, eventId: q.eventId,
+      title: null, description: null, location: null, start: null, end: null, allDay: null, timingEvidence: null, reminderMinutes: null }, false, q.date);
+  }
   async prepareGuestAddition(sender: string, input: unknown): Promise<Reply> {
     const q = eventGuestAddition.parse(input);
     const reply = await this.prepareChange(sender, { operation: 'update', calendarId: q.calendarId, eventId: q.eventId,
       title: null, description: null, location: null, start: null, end: null, allDay: null, timingEvidence: null, reminderMinutes: null }, true);
     return q.names === null ? reply : this.selectGuestNames(sender, q.names);
   }
-  private async prepareChange(sender: string, input: unknown, addGuests = false): Promise<Reply> {
+  private async prepareChange(sender: string, input: unknown, addGuests = false, newDate?: string): Promise<Reply> {
     const q = eventChange.parse(input); const c = await this.writable(sender);
     const calendar = await this.request(c, `/users/me/calendarList/${encodeURIComponent(q.calendarId)}`);
     if (!['owner', 'writer'].includes(calendar.accessRole)) throw new PublicError('Sua conta só pode consultar esta agenda. Escolha uma agenda com permissão de edição.');
@@ -114,6 +123,7 @@ export class CalendarWrites {
     const fields = [q.title, q.description, q.location, q.start, q.end, q.allDay, q.reminderMinutes];
     if (q.operation === 'delete' && fields.some(v => v !== null)) throw new PublicError('Para excluir, envie somente a identificação do evento.');
     if (q.operation !== 'delete') {
+      if (newDate) Object.assign(patch, rescheduleEvent(before!, newDate, this.oauth.config.timeZone));
       if (q.title !== null) patch.summary = q.title;
       if (q.description !== null) patch.description = q.description;
       if (q.location !== null) patch.location = q.location;

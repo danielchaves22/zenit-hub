@@ -15,3 +15,13 @@ test('Calendar cannot turn missing times, invented evidence, dates or partial ho
   assert.throws(() => check({ ...change, allDay: true }, ['das 14h às 17h']));
   check({ ...change, allDay: true, timingEvidence: 'dia inteiro' }, ['Marque no dia inteiro']);
 });
+
+test('equivalent clock spelling in a quote is accepted without accepting invented times or prose', () => {
+  const q = { ...change, start: '2026-10-12T08:00:00-03:00', end: '2026-10-12T09:00:00-03:00', timingEvidence: '08:00 às 09:00' };
+  checkCalendarTiming(q, ['8:00 às 9:00'], 'America/Sao_Paulo');
+  checkCalendarTiming(q, ['8h às 9h'], 'America/Sao_Paulo');
+  checkCalendarTiming(q, ['  8h00   às   9h00  '], 'America/Sao_Paulo');
+  assert.throws(() => checkCalendarTiming(q, ['8:00 às 10:00'], 'America/Sao_Paulo'));
+  assert.throws(() => checkCalendarTiming(q, ['No mesmo horário do original'], 'America/Sao_Paulo'));
+  assert.throws(() => checkCalendarTiming({ ...q, timingEvidence: 'Inventado das 08:00 às 09:00' }, ['8:00 às 9:00'], 'America/Sao_Paulo'));
+});

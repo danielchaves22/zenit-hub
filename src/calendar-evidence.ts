@@ -2,14 +2,21 @@ import { PublicError } from './types.js';
 
 type Timing = { operation: string; start: string | null; end: string | null; allDay: boolean | null; timingEvidence: string | null };
 export class CalendarTimingError extends PublicError {}
+// Match user quotes after harmless spelling changes, without inventing evidence.
+function normalizeEvidence(text: string) {
+  return text.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b([01]?\d|2[0-3])(?:h([0-5]\d)?|:([0-5]\d))(?!\d)/g,
+      (_match, hour: string, hMinutes: string, colonMinutes: string) => `${hour.padStart(2, '0')}:${hMinutes || colonMinutes || '00'}`)
+    .replace(/\s+/g, ' ').trim();
+}
 // A model may propose parameters, but cannot supply a missing user time itself.
 export function checkCalendarTiming(change: Timing, userMessages: string[], timeZone: string) {
   if (change.operation === 'delete' || (change.start === null && change.end === null && change.allDay === null)) return;
-  const evidence = change.timingEvidence?.trim();
-  if (!evidence || !userMessages.some(text => text.includes(evidence))) {
+  const evidence = normalizeEvidence(change.timingEvidence || '');
+  if (!evidence || !userMessages.some(text => normalizeEvidence(text).includes(evidence))) {
     throw new CalendarTimingError('Qual é o horário de início e de fim? Informe em HH:mm, ou diga "dia inteiro". Ainda não preparei nenhum evento para gravar.');
   }
-  const text = evidence.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const text = evidence;
   if (change.allDay) {
     if (!/\b(dia inteiro|dia todo|todo o dia|sem horario)\b/.test(text)) throw new CalendarTimingError('Esse compromisso é de dia inteiro ou tem horário? Ainda não preparei nenhum evento para gravar.');
     return;

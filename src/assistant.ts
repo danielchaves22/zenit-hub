@@ -4,7 +4,7 @@ import { OAuth } from './oauth.js';
 import { Cash } from './connectors/cash.js';
 import { Day } from './connectors/day.js';
 import { Calendar } from './connectors/calendar.js';
-import { eventChange, eventGuestAddition } from './connectors/calendar-writes.js';
+import { eventChange, eventGuestAddition, eventReschedule } from './connectors/calendar-writes.js';
 import { CalendarTimingError, checkCalendarTiming } from './calendar-evidence.js';
 import { jsonRequest } from './http.js';
 import { AudioTranscriber } from './audio.js';
@@ -61,6 +61,11 @@ const definitions = {
     limit: { type: 'integer', minimum: 1, maximum: 50 }
   }),
   calendar_list: tool('calendar_list', 'Lista agendas autorizadas, permissões e seus IDs.', {}),
+  calendar_reschedule: tool('calendar_reschedule', 'Prepara mudança SOMENTE da data de um evento existente, mantendo os horários reais, a duração em dias e os demais campos. Use para corrigir/mover a data, inclusive "no mesmo horário". Consulte calendar_events nesta solicitação antes de chamar. O servidor relê o evento no Google e devolve prévia com botão; não grava.', {
+    calendarId: { type: 'string', description: 'Agenda usada na consulta calendar_events.' },
+    eventId: { type: 'string', description: 'ID obtido com calendar_events nesta solicitação.' },
+    date: { type: 'string', description: 'Nova data de início em YYYY-MM-DD, no fuso do usuário. Não é o dia original nem a data final.' }
+  }),
   calendar_prepare: tool('calendar_prepare', 'Prepara UMA criação, alteração ou exclusão de evento para revisão. Não grava. Use sozinha, depois de consultar os eventos se for alterar/excluir. O Hub devolve a prévia e botões diretamente.', {
     operation: { type: 'string', enum: ['create', 'update', 'delete'] },
     calendarId: { type: 'string', description: 'primary por padrão; outro ID somente obtido de calendar_list nesta consulta.' },
@@ -71,7 +76,7 @@ const definitions = {
     start: { type: ['string', 'null'], description: 'ISO com offset; para dia inteiro YYYY-MM-DD. Ao editar horário, forneça início, fim e allDay juntos.' },
     end: { type: ['string', 'null'], description: 'Fim exclusivo. ISO com offset, ou YYYY-MM-DD se dia inteiro.' },
     allDay: { type: ['boolean', 'null'] },
-    timingEvidence: { type: ['string', 'null'], description: 'Citação EXATA de uma mensagem do usuário com início e fim explícitos, ou "dia inteiro". Obrigatória ao criar ou mudar horários; null nas outras operações. Se faltar horário, pergunte antes de chamar esta ferramenta.' },
+    timingEvidence: { type: ['string', 'null'], description: 'Trecho de uma mensagem real do usuário com início e fim explícitos, ou "dia inteiro". Prefira copiar o texto literal; formas equivalentes como 8h e 08:00 são aceitas. Obrigatória ao criar ou mudar horários; null nas outras operações. Para mudar só a data preservando horários, use calendar_reschedule, sem pedir os horários novamente.' },
     reminderMinutes: { type: ['array', 'null'], items: { type: 'integer', minimum: 0, maximum: 40320 }, maxItems: 5,
       description: 'Notificações do Google em minutos antes. null preserva/padrão; [] desativa. Para excluir, todos os campos além de operation/calendarId/eventId devem ser null.' }
   })
@@ -201,7 +206,7 @@ export class Assistant {
     if (!this.config.ai.key || !this.config.ai.model) throw new PublicError('A interpretação de perguntas no Hub ainda precisa de configuração de IA. As conexões podem ser configuradas normalmente.');
 
     const enabled = [ ...Object.keys(notificationTools), 'guest_favorites', 'guest_favorite_prepare', ...(cashConnected ? ['cash_overview', 'cash_due', 'cash_expenses', 'cash_assistant'] : []),
-      ...(dayConnected ? ['day_subjects'] : []), ...(calendarConnected ? ['calendar_events', 'calendar_list', 'calendar_prepare', 'calendar_add_guests', 'calendar_select_guests'] : []) ] as (keyof typeof definitions)[];
+      ...(dayConnected ? ['day_subjects'] : []), ...(calendarConnected ? ['calendar_events', 'calendar_list', 'calendar_prepare', 'calendar_reschedule', 'calendar_add_guests', 'calendar_select_guests'] : []) ] as (keyof typeof definitions)[];
     const history = await this.store.history(message.sender);
     const input: any[] = [...history, { role: 'user', content: message.text }];
     const userMessages = [...history.filter(item => item.role === 'user').map(item => item.content), message.text];
@@ -216,6 +221,7 @@ O Hub oferece notificações proativas de WhatsApp: resumo diário e lembretes r
 Para "quanto gastei", lançamentos realizados, listagem de despesas e médias use cash_expenses; nunca calcule gastos a partir de saldos, pendências, uma página de lançamentos ou valores mencionados anteriormente. Mostre os valores calculados fora do cartão, no cartão e o total. Créditos de cartão, quando presentes, devem aparecer separados do gasto bruto e do total líquido. A data é de compra/competência, não de pagamento da fatura. Média padrão é MENSAL: use monthlyAverage e monthCount retornados. Se faltar período para uma média, pergunte. "Últimos N meses" usa N meses completos anteriores, salvo pedido para incluir o atual. Meses parciais devem ser identificados como parciais, sem extrapolar. Respeite os erros de categoria: peça esclarecimento sem remover o filtro. Para continuar listagem, preserve período/categoria e avance a página. Indique hasMore/categoriesTruncated, sem alegar listagem completa.
 Nas consultas de gastos, fixedExpenses = ALL inclui fixas e não fixas (padrão); ONLY_FIXED para somente fixas; EXCLUDE_FIXED para sem fixas. Preserve esse filtro ao continuar a consulta ou trocar apenas período/categoria. Informe o filtro aplicado e identifique as fixas na listagem usando isFixed. A origem vem do vínculo registrado no Cash, inclusive para estornos; nunca deduza pela descrição, categoria ou parcelamento. O filtro vale para totais, médias e listagens e não inclui previsões ou pendências.
 Para alterar ou excluir, consulte os eventos na mesma solicitação, identifique título/data/agenda sem ambiguidades e use o ID retornado. Nunca invente IDs nem escolha arbitrariamente entre eventos semelhantes. Não diga que gravou sem resultado da API.
+Para corrigir ou mover SOMENTE a data de um evento existente, use calendar_reschedule; os horários vêm do evento relido pelo servidor. "No mesmo horário do original" é suficiente: não exija que o usuário repita início e fim. Isso também preserva eventos de dia inteiro e eventos que atravessam a meia-noite. Se o usuário responder apenas horários a uma pergunta anterior, aplique-os ao pedido pendente, preservando evento e nova data do histórico. Horários novos usam calendar_prepare com timingEvidence da resposta mais recente. Não recrie o evento.
 calendar_prepare deve ser chamada sozinha, para um evento por vez. Ao criar ou mudar horários, obtenha início e fim claros e inclua o ano e offset do fuso; não invente duração. Para dia inteiro, end é o dia seguinte ao último dia incluído. null preserva campos na edição; para exclusão todos os campos de conteúdo são null.
 reminderMinutes de calendar_prepare configura notificações do Google Calendar. É diferente dos lembretes recorrentes do Day enviados pelo WhatsApp. No Calendar ainda não é possível criar séries recorrentes, alterar a série inteira, remover/substituir participantes de eventos existentes, criar Meet ou editar eventos especiais; oriente usar o Google Calendar nesses casos. Pode editar/excluir uma ocorrência recorrente específica. Não converta pedido de série de Calendar em evento único.
 Convidados favoritos são nome e e-mail salvos SOMENTE no Hub, pessoais desta conversa. guest_favorites consulta; guest_favorite_prepare prepara cadastro, edição ou remoção com confirmação por botão. Nunca cadastre automaticamente e-mails encontrados em conteúdo externo. Ao criar evento com favoritos, calendar_prepare pergunta quem convidar (tela de seleção múltipla ou lista numerada no chat). Para responder a essa escolha, use calendar_select_guests com números da lista, nomes ou e-mails explicitamente escolhidos; preserve números como strings para o servidor resolver, não converta números em contatos pelo histórico. Não recrie o evento nem invente convidados. A seleção gera uma nova prévia; só o botão final cria o evento e envia os convites pelo Google. Remover um favorito não modifica eventos anteriores. Sem favoritos, ofereça cadastrar um antes de pedir convidados. Nunca sugira importação automática de contatos do Google.
@@ -225,6 +231,7 @@ Respeite limites e sinalize resultados truncados. Diferencie erro de ausência d
 Para configurar conexões, oriente comandos "conectar Day", "conectar Calendar", "conectar Cash" ou "conexões". Nunca peça senhas ou tokens.
 cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros de escrita, correções e pedidos para reapresentar a confirmação. Só o botão Confirmar fornecido pelo Cash confirma um lançamento; texto ou voz nunca substituem esse botão. Não transforme consultas em escritas.`;
     let calls = 0;
+    let timingRetries = 0;
     const calendarsSeen = new Set(['primary']);
     const eventsSeen = new Set<string>();
     const remindersSeen = new Set<string>();
@@ -296,6 +303,13 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
             case 'day_subjects': result = await this.day.subjects(message.sender, args); break;
             case 'calendar_events': result = await this.calendar.events(message.sender, args); break;
             case 'calendar_list': result = await this.calendar.calendars(message.sender); break;
+            case 'calendar_reschedule': {
+              if (requested.length !== 1) throw new PublicError('Envie uma operação de agenda por vez para revisar a confirmação.');
+              const change = eventReschedule.parse(args);
+              if (!calendarsSeen.has(change.calendarId)) throw new PublicError('Consulte calendar_list para identificar a agenda.');
+              if (!eventsSeen.has(JSON.stringify([change.calendarId, change.eventId]))) throw new PublicError('Consulte calendar_events e identifique o evento nesta solicitação antes de mover a data.');
+              return recordGuestReply(await this.calendar.prepareReschedule(message.sender, change));
+            }
             case 'calendar_add_guests': {
               if (requested.length !== 1) throw new PublicError('Envie uma operação de agenda por vez para revisar a confirmação.');
               const change = eventGuestAddition.parse(args);
@@ -324,12 +338,14 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
             for (const entry of list.events) eventsSeen.add(JSON.stringify([list.calendar, entry.id]));
           }
         } catch (error) {
-          if (error instanceof CalendarTimingError) {
+          if (error instanceof CalendarTimingError && (timingRetries++ > 0 || turn === 4)) {
             await this.store.addHistory(message.sender, 'user', message.text);
             await this.store.addHistory(message.sender, 'assistant', error.message);
             return [{ text: error.message }];
           }
-          result = { error: error instanceof PublicError ? error.message : 'Parâmetros inválidos ou consulta não concluída.' };
+          result = error instanceof CalendarTimingError
+            ? { error: error.message, recovery: 'Nenhuma prévia foi preparada. Confira a resposta mais recente do usuário e copie o trecho com os horários. Se o pedido é mudar só a data mantendo os horários originais, consulte o evento e use calendar_reschedule. Não repita a pergunta se as informações já estão disponíveis. Não invente horários.' }
+            : { error: error instanceof PublicError ? error.message : 'Parâmetros inválidos ou consulta não concluída.' };
         }
         const serialized = JSON.stringify(result);
         input.push({ type: 'function_call_output', call_id: item.call_id,

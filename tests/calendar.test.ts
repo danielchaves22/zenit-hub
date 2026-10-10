@@ -22,6 +22,7 @@ async function setup() {
   const store = await createTestStore(config.key); await store.connect(connection);
   const calls: { url: URL; init: RequestInit }[] = [];
   const fixture = { role: 'owner', status: 200, fail: false, series: false, eventType: 'default',
+    event: { summary: 'Título anterior', start: { dateTime: create.start }, end: { dateTime: create.end } },
     calendar: undefined as Calendar | undefined, store, calls };
   const fetcher = (async (url, init = {}) => {
     calls.push({ url: new URL(String(url)), init });
@@ -30,7 +31,7 @@ async function setup() {
       return init.method === 'DELETE' && fixture.status === 200 ? new Response(null, { status: 204 }) : json({ id: 'result' }, fixture.status);
     }
     if (String(url).includes('/calendarList/')) return json({ id: 'alice-calendar', summary: 'Pessoal', accessRole: fixture.role });
-    return json({ id: 'event123', etag: '"v1"', summary: 'Título anterior', start: { dateTime: create.start }, end: { dateTime: create.end },
+    return json({ id: 'event123', etag: '"v1"', ...fixture.event,
       description: 'Conteúdo preservado', eventType: fixture.eventType, attendees: [{ email: 'guest@example.com' }], organizer: { self: true },
       ...(fixture.series ? { recurrence: ['RRULE:FREQ=WEEKLY'] } : {}) });
   }) as typeof fetch;
@@ -53,6 +54,30 @@ test('create only persists an encrypted preview; same-sender button executes onc
     const body = JSON.parse(String(writes[0].init.body));
     assert.match(body.id, /^[0-9a-f]{32}$/); assert.equal(body.start.dateTime, create.start);
     assert.equal(body.start.timeZone, 'America/Sao_Paulo'); assert.equal(body.summary, create.title);
+  } finally { await store.close(); }
+});
+
+test('date-only edit reads the original clocks from Google and patches only dates after confirmation', async () => {
+  const { store, calendar, calls, fixture } = await setup();
+  try {
+    fixture.event = { summary: 'Missa na paróquia', start: { dateTime: '2026-12-12T08:00:00-03:00' }, end: { dateTime: '2026-12-12T09:00:00-03:00' } };
+    const preview = await calendar.prepareReschedule('alice', { calendarId: 'primary', eventId: 'event123', date: '2026-10-12' });
+    assert.match(preview.text, /Missa na paróquia/);
+    assert.match(preview.text, /12\/12\/2026,? 08:00/);
+    assert.match(preview.text, /12\/10\/2026,? 08:00/);
+    assert.match(preview.text, /12\/10\/2026,? 09:00/);
+    assert(calls.some(c => c.url.pathname.endsWith('/events/event123')));
+    assert(calls.every(c => !c.init.method));
+    await calendar.confirm('alice', token(preview), true);
+    const write = calls.find(c => c.init.method === 'PATCH')!;
+    assert.deepEqual(JSON.parse(String(write.init.body)), {
+      start: { dateTime: '2026-10-12T11:00:00.000Z', timeZone: 'America/Sao_Paulo' },
+      end: { dateTime: '2026-10-12T12:00:00.000Z', timeZone: 'America/Sao_Paulo' }
+    });
+    assert.equal((write.init.headers as any)['If-Match'], '"v1"');
+    fixture.status = 412;
+    const stale = await calendar.prepareReschedule('alice', { calendarId: 'primary', eventId: 'event123', date: '2026-10-13' });
+    assert.match((await calendar.confirm('alice', token(stale), true)).text, /mudou no Google/);
   } finally { await store.close(); }
 });
 
