@@ -5,7 +5,9 @@ import type { Store } from './store.js';
 import type { Day } from './connectors/day.js';
 import type { Cash } from './connectors/cash.js';
 import type { Calendar } from './connectors/calendar.js';
-import { PublicError, type Reply } from './types.js';
+import { ConnectionAccessError, ReminderConsentError, PublicError, type Reply } from './types.js';
+import { HttpError } from './http.js';
+import { notificationProblemText, type NotificationProblem, type NotificationWarning } from './notification-problems.js';
 import {
   NotificationStore,
   type NotificationKind,
@@ -72,6 +74,10 @@ const display = (at: number | string, zone: string) =>
   new Intl.DateTimeFormat('pt-BR', { timeZone: zone, dateStyle: 'short', timeStyle: 'short' }).format(
     new Date(at),
   );
+const dayProblem = (error: unknown): NotificationProblem =>
+  error instanceof ReminderConsentError ? 'day_consent' :
+  error instanceof ConnectionAccessError || (error instanceof HttpError && error.code !== 'invalid_client' && [401,403].includes(error.status))
+    ? 'day_access' : 'day_unavailable';
 
 export class Notifications {
   readonly db: NotificationStore;
@@ -117,6 +123,20 @@ export class Notifications {
     }
     return true;
   }
+  private subscriptionState(s: Subscription) {
+    if (s.problem) return `${s.enabled ? 'assinatura mantida; envio interrompido' : 'pausado'}. ${notificationProblemText(s.problem, this.config.day.siteUrl)}`;
+    if (!s.enabled) return 'pausado';
+    if (s.kind === 'day_reminders' && Date.now() - s.checkedAt > 120_000)
+      return 'assinatura mantida; verificação do Day atrasada. O funcionamento do envio ainda não foi confirmado. Consulte novamente em instantes.';
+    return 'ativo';
+  }
+  async warnings(sender: string): Promise<NotificationWarning[]> {
+    return (await this.db.list(sender)).filter(s => s.problem && !s.problemNotifiedAt).map(s => ({
+      kind: s.kind, revision: s.revision, problem: s.problem!, since: s.problemSince,
+      text: `${names[s.kind]}: ${notificationProblemText(s.problem!, this.config.day.siteUrl)}`,
+      detail: notificationProblemText(s.problem!, this.config.day.siteUrl),
+    }));
+  }
   async catalog(sender: string): Promise<Reply> {
     const list = await this.db.list(sender);
     const lines = await Promise.all(
@@ -128,7 +148,7 @@ export class Notifications {
           /* Honest unavailable state. */
         }
         const s = list.find((s) => s.kind === kind);
-        return `• ${names[kind]}: ${s?.enabled ? 'assinado' + (kind === 'daily_summary' ? ` às ${s.data.time} (${s.data.timeZone})` : '') : s ? 'pausado' : 'não assinado'}. ${ready ? 'Envio disponível.' : 'Envio aguardando configuração/aprovação no WhatsApp.'}`;
+        return `• ${names[kind]}: ${s ? this.subscriptionState(s) + (kind === 'daily_summary' ? ` — ${s.data.time} (${s.data.timeZone})` : '') : 'não assinado'}. ${ready ? 'Modelo de envio aprovado no WhatsApp.' : 'Envio aguardando configuração/aprovação no WhatsApp.'}`;
       }),
     );
     return {
@@ -153,8 +173,18 @@ export class Notifications {
       pending: 'na fila',
       sending: 'em envio',
     };
+    const reasons: Record<string, string> = {
+      template_unavailable: 'modelo indisponível no WhatsApp',
+      source_unavailable: 'não foi possível acessar a fonte',
+      subscription_changed: 'assinatura ou conta alterada',
+      opt_out: 'envio pausado',
+      expired: 'horário de envio expirou',
+      expired_or_cancelled: 'horário expirou ou envio foi cancelado',
+      reminder_changed: 'lembrete alterado ou pausado',
+      send_failed: 'não foi possível confirmar se o WhatsApp aceitou o envio',
+    };
     return {
-      text: `Minhas notificações\n${list.map((s) => `${names[s.kind]}: ${s.enabled ? 'ativo' : 'pausado'}${s.kind === 'daily_summary' ? ` — ${s.data.time}, ${s.data.timeZone}; fontes: ${s.data.sources.join(', ')}` : ''}`).join('\n') || 'Nenhuma assinatura.'}\n\nÚltimos avisos:\n${history.map((h) => `${names[h.kind as NotificationKind]} — ${display(Number(h.due), this.config.timeZone)}: ${states[h.state] || h.state}`).join('\n') || 'Nenhum aviso programado ainda.'}\n\nEnvie “parar notificações”, “cancelar resumo diário” ou “cancelar lembretes do Day”. Para retomar, peça a assinatura novamente.`,
+      text: `Minhas notificações\n${list.map((s) => `${names[s.kind]}: ${this.subscriptionState(s)}${s.kind === 'daily_summary' ? ` — ${s.data.time}, ${s.data.timeZone}; fontes: ${s.data.sources.join(', ')}` : ''}`).join('\n') || 'Nenhuma assinatura.'}\n\nÚltimos avisos:\n${history.map((h) => `${names[h.kind as NotificationKind]} — ${display(Number(h.due), this.config.timeZone)}: ${states[h.state] || h.state}${reasons[h.reason] ? ` (${reasons[h.reason]})` : ''}`).join('\n') || 'Nenhum envio registrado ainda.'}\n\nEnvie “parar notificações”, “cancelar resumo diário” ou “cancelar lembretes do Day”. Para retomar uma assinatura pausada, peça a assinatura novamente. Falhas de acesso não cancelam a assinatura; siga a orientação acima.`,
     };
   }
   async daySetup(sender: string): Promise<Reply> {
@@ -381,7 +411,7 @@ export class Notifications {
       for (const s of await this.db.due(now)) {
         try {
           if (!(await this.valid(s))) {
-            await this.db.pause(s.sender, s.kind);
+            await this.db.pause(s.sender, s.kind, 'connection_changed');
             continue;
           }
           if (s.kind === 'daily_summary') {
@@ -394,6 +424,7 @@ export class Notifications {
             if (due >= s.data.since && due <= now && now - due < 3600_000)
               await this.db.enqueue(s, date, due, 3600_000, { date }, now);
           } else {
+            await this.day.requireReminders(s.sender);
             const after = Math.max(s.data.since - 1, s.checkedAt, now - 300_000);
             const result = await this.day.occurrences(s.sender, after, now);
             if (!Array.isArray(result.items) || result.truncated)
@@ -418,8 +449,8 @@ export class Notifications {
             }
           }
           await this.db.checked(s, now, true);
-        } catch {
-          await this.db.checked(s, now, false);
+        } catch (error) {
+          await this.db.checked(s, now, false, s.kind === 'day_reminders' ? dayProblem(error) : null);
           console.error('hub.notifications.poll.failed');
         }
       }
@@ -446,7 +477,13 @@ export class Notifications {
       }
       let values: string[];
       if (d.kind === 'day_reminders') {
-        const r = (await this.day.reminders(d.sender, d.data.reminderId)).items[0];
+        let r;
+        try {
+          r = (await this.day.reminders(d.sender, d.data.reminderId)).items[0];
+        } catch (error) {
+          await this.db.problem(s, dayProblem(error), now);
+          throw error;
+        }
         if (!r || !r.enabled || r.deleted || r.revision !== d.data.reminderRevision) {
           await this.db.mark(d.id, 'skipped', 'reminder_changed');
           return;

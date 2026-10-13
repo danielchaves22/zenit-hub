@@ -2,6 +2,7 @@ import { Store } from './store.js';
 import { digest, randomToken } from './security.js';
 import { transaction } from './database.js';
 import type { Reply } from './types.js';
+import type { NotificationProblem } from './notification-problems.js';
 
 export type NotificationKind = 'daily_summary' | 'day_reminders';
 export type Preferences = {
@@ -19,6 +20,9 @@ export type Subscription = {
   revision: number;
   data: Preferences;
   checkedAt: number;
+  problem: NotificationProblem | null;
+  problemSince: number;
+  problemNotifiedAt: number;
 };
 export type DeliveryData = {
   account?: string;
@@ -45,6 +49,8 @@ export class NotificationStore {
       ...row,
       data: this.store.vault.open(row.data, `subscription:${row.sender}:${row.kind}`),
       checkedAt: Number(row.checked_at),
+      problemSince: Number(row.problem_since),
+      problemNotifiedAt: Number(row.problem_notified_at),
     };
   }
   async list(sender: string): Promise<Subscription[]> {
@@ -61,15 +67,18 @@ export class NotificationStore {
     await this.store.db.query(
       `INSERT INTO notification_subscriptions(sender,kind,enabled,revision,data,next_check,checked_at,updated)
       VALUES($1,$2,true,1,$3,$4,$4,$4) ON CONFLICT(sender,kind) DO UPDATE SET enabled=true,revision=notification_subscriptions.revision+1,
-      data=excluded.data,next_check=excluded.next_check,checked_at=excluded.checked_at,updated=excluded.updated`,
+      data=excluded.data,next_check=excluded.next_check,checked_at=excluded.checked_at,updated=excluded.updated,
+      problem=NULL,problem_since=0,problem_notified_at=0`,
       [sender, kind, this.store.vault.seal(data, `subscription:${sender}:${kind}`), now],
     );
   }
-  async pause(sender: string, kind?: NotificationKind) {
+  async pause(sender: string, kind?: NotificationKind, problem: NotificationProblem | null = null) {
     await transaction(this.store.db, async (tx) => {
       await tx.query(
-        'UPDATE notification_subscriptions SET enabled=false,revision=revision+1,updated=$3 WHERE sender=$1 AND ($2::text IS NULL OR kind=$2)',
-        [sender, kind ?? null, Date.now()],
+        `UPDATE notification_subscriptions SET enabled=false,revision=revision+1,updated=$3,
+          problem=$4,problem_since=CASE WHEN $4::text IS NULL THEN 0::bigint ELSE $3::bigint END,problem_notified_at=0
+          WHERE sender=$1 AND ($2::text IS NULL OR kind=$2)`,
+        [sender, kind ?? null, Date.now(), problem],
       );
       await tx.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [
         sender,
@@ -87,11 +96,20 @@ export class NotificationStore {
     );
     return rows.map((row) => this.open(row));
   }
-  async checked(s: Subscription, now: number, success: boolean) {
+  async checked(s: Subscription, now: number, success: boolean, problem: NotificationProblem | null = null) {
     await this.store.db.query(
-      'UPDATE notification_subscriptions SET next_check=$1,checked_at=CASE WHEN $2 THEN $3 ELSE checked_at END WHERE sender=$4 AND kind=$5 AND revision=$6',
-      [now + (success ? 30_000 : 60_000), success, now, s.sender, s.kind, s.revision],
+      `UPDATE notification_subscriptions SET next_check=$1,checked_at=CASE WHEN $2 THEN $3 ELSE checked_at END,
+        problem=$7,problem_since=CASE WHEN $7::text IS NULL THEN 0 WHEN problem IS DISTINCT FROM $7 THEN $3 ELSE problem_since END,
+        problem_notified_at=CASE WHEN problem IS DISTINCT FROM $7 THEN 0 ELSE problem_notified_at END
+        WHERE sender=$4 AND kind=$5 AND revision=$6 AND enabled`,
+      [now + (success ? 30_000 : 60_000), success, now, s.sender, s.kind, s.revision, success ? null : problem],
     );
+  }
+  async problem(s: Subscription, problem: NotificationProblem, now = Date.now()) {
+    await this.store.db.query(`UPDATE notification_subscriptions SET problem=$4,
+      problem_since=CASE WHEN problem IS DISTINCT FROM $4 THEN $5 ELSE problem_since END,
+      problem_notified_at=CASE WHEN problem IS DISTINCT FROM $4 THEN 0 ELSE problem_notified_at END
+      WHERE sender=$1 AND kind=$2 AND revision=$3 AND enabled`, [s.sender, s.kind, s.revision, problem, now]);
   }
   async draft(sender: string, data: unknown) {
     const token = randomToken(),

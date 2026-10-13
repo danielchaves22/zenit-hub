@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { OAuth } from '../oauth.js';
-import { jsonRequest } from '../http.js';
-import { PublicError, type Fetch } from '../types.js';
+import { HttpError, jsonRequest } from '../http.js';
+import { ConnectionAccessError, ReminderConsentError, type Fetch } from '../types.js';
 
 export const dayQuery = z.object({ status: z.enum(['pending', 'todo', 'doing', 'waiting', 'blocked', 'done']).default('pending'),
   dueBefore: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().default(null), limit: z.number().int().min(1).max(50).default(20) }).strict();
@@ -9,14 +9,20 @@ export class Day {
   constructor(private oauth: OAuth, private fetcher: Fetch = fetch) {}
   async rpc(sender: string, name: string, body: unknown) {
     const c=await this.oauth.connection(sender,'day');
-    return jsonRequest(this.fetcher,`${this.oauth.config.day.url}/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(body),
-      headers:{'Content-Type':'application/json',apikey:this.oauth.config.day.key,Authorization:`Bearer ${c.tokens.access_token}`}});
+    try {
+      return await jsonRequest(this.fetcher,`${this.oauth.config.day.url}/rest/v1/rpc/${name}`,{method:'POST',body:JSON.stringify(body),
+        headers:{'Content-Type':'application/json',apikey:this.oauth.config.day.key,Authorization:`Bearer ${c.tokens.access_token}`}});
+    } catch (error) {
+      if (error instanceof HttpError && [401,403].includes(error.status))
+        throw new ConnectionAccessError('O Day recusou o acesso. Envie “conectar Day” para autorizar novamente.');
+      throw error;
+    }
   }
   async remindersAuthorized(sender: string) {
     const result=await this.rpc(sender,'zenit_day_hub_reminders_check',{});return result.authorized===true;
   }
   async requireReminders(sender: string) {
-    if (!await this.remindersAuthorized(sender)) throw new PublicError(`Autorize primeiro os lembretes na conta do Day conectada ao Hub: ${this.oauth.config.day.siteUrl}/hub/reminders. Depois envie "ativar lembretes do Day".`);
+    if (!await this.remindersAuthorized(sender)) throw new ReminderConsentError(`Autorize primeiro os lembretes na conta do Day conectada ao Hub: ${this.oauth.config.day.siteUrl}/hub/reminders. Depois consulte “minhas assinaturas”; se ainda não assinou, envie “ativar lembretes do Day”.`);
   }
   async reminders(sender: string, id?: string, filter: {search?: string|null;limit?: number} = {}) {
     await this.requireReminders(sender);const c=await this.oauth.connection(sender,'day');

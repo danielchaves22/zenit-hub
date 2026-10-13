@@ -10,6 +10,9 @@ import { Day } from '../src/connectors/day.js';
 import { NotificationTransport } from '../src/notification-transport.js';
 import { WhatsApp } from '../src/whatsapp.js';
 import { metaSignature } from '../src/security.js';
+import { ConnectionAccessError, ReminderConsentError } from '../src/types.js';
+import { Worker } from '../src/worker.js';
+import { HttpError } from '../src/http.js';
 
 const config = readConfig({
   DATABASE_URL: 'postgres://test@localhost/zenit_hub_test',
@@ -61,13 +64,17 @@ async function fixture() {
     sent: [] as any[],
     writes: [] as any[],
     failSend: false,
+    pollError: null as Error | null,
   };
   const day = {
     remindersAuthorized: async () => state.authorized,
     requireReminders: async () => {
-      if (!state.authorized) throw new Error('consent required');
+      if (!state.authorized) throw new ReminderConsentError('consent required');
     },
-    occurrences: async () => ({ items: state.occurrences, truncated: false }),
+    occurrences: async () => {
+      if (state.pollError) throw state.pollError;
+      return { items: state.occurrences, truncated: false };
+    },
     reminders: async (_s: string, id?: string) => {
       if (!state.authorized) throw new Error('revoked');
       return { items: state.reminders.filter((r) => !id || r.id === id), truncated: false };
@@ -425,4 +432,196 @@ test('new Day consent is checked before querying reminders and identity never co
   } finally {
     await store.close();
   }
+});
+
+test('same-account reauthorization preserves subscription, consent, scheduled delivery and deduplication; opt-out stays paused', async () => {
+  const f = await fixture();
+  try {
+    const sub = await f.subscribe();
+    const original = (await f.store.connection(sender, 'day'))!;
+    const now = Date.now() + 1000, id = randomUUID();
+    const occurrence = `${sub.data.accounts.day}:${id}:${now}`;
+    f.state.reminders = [{ id, revision: 1, enabled: true, deleted: false, title: 'Livro' }];
+    await f.n.db.enqueue(sub, occurrence, now, 300000, { reminderId: id, reminderRevision: 1, timeZone: config.timeZone });
+    await f.store.connect({ ...original, label: 'renamed@example.test', tokens: { ...original.tokens, access_token: 'new-access', refresh_token: 'new-refresh' } });
+    const after = (await f.n.db.subscription(sender, 'day_reminders'))!;
+    assert.equal(after.enabled, true);
+    assert.equal(after.revision, sub.revision);
+    assert.deepEqual(after.data, sub.data);
+    assert.equal((await f.store.connection(sender, 'day'))!.grantId, original.grantId);
+    await f.n.tick(now);
+    await f.n.db.enqueue(after, occurrence, now, 300000, {});
+    await f.n.tick(now + 1000);
+    assert.equal(f.state.sent.length, 1);
+    await f.n.db.pause(sender);
+    await f.connect();
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.enabled, false);
+    await f.connect('other');
+    await f.connect();
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.enabled, false);
+  } finally { await f.store.close(); }
+});
+
+test('changing or disconnecting Calendar leaves Day reminders enabled; changing Day only pauses dependent subscriptions', async () => {
+  const f = await fixture();
+  try {
+    await f.subscribe();
+    const dayConnection = (await f.store.connection(sender, 'day'))!;
+    await f.store.connect({ ...dayConnection, provider: 'calendar', accountId: 'calendar-a' });
+    let calendar = (await f.store.connection(sender, 'calendar'))!;
+    const daySub = (await f.n.db.subscription(sender, 'day_reminders'))!;
+    await f.n.db.save(sender, 'daily_summary', { ...daySub.data, sources: ['calendar'], accounts: { calendar: JSON.stringify([calendar.accountId, calendar.grantId]) } });
+    await f.store.connect({ ...calendar, accountId: 'calendar-b' });
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.enabled, true);
+    assert.equal((await f.n.db.subscription(sender, 'daily_summary'))!.problem, 'connection_changed');
+    await f.store.disconnect(sender, 'calendar');
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.enabled, true);
+    await f.n.db.save(sender, 'daily_summary', { ...daySub.data, sources: ['cash'], accounts: { cash: 'connected' } });
+    await f.connect('different-day-account');
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.enabled, false);
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, 'connection_changed');
+    assert.equal((await f.n.db.subscription(sender, 'daily_summary'))!.enabled, true);
+    assert.match((await f.n.status(sender)).text, /contas utilizadas mudou/);
+  } finally { await f.store.close(); }
+});
+
+test('poll failures persist actionable access status, keep the subscription and clear only after successful authenticated polling', async () => {
+  const f = await fixture();
+  try {
+    const sub = await f.subscribe();
+    const now = Date.now() + 1000;
+    f.state.pollError = new ConnectionAccessError('private provider diagnostic');
+    await f.n.tick(now);
+    let current = (await f.n.db.subscription(sender, 'day_reminders'))!;
+    assert.equal(current.enabled, true);
+    assert.equal(current.problem, 'day_access');
+    assert.equal(current.checkedAt, sub.checkedAt);
+    assert.equal(current.problemSince, now);
+    assert.match((await f.n.status(sender)).text, /envio interrompido.*perdeu a autorização/);
+    assert.match((await f.n.catalog(sender)).text, /conectar Day/);
+    assert(!JSON.stringify(await f.n.status(sender)).includes('private provider'));
+    assert.equal(f.state.sent.length, 0);
+    assert.equal((await f.n.db.history(sender)).length, 0);
+    await f.connect();
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, 'day_access');
+    f.state.pollError = null;
+    await f.n.tick(now + 61000);
+    current = (await f.n.db.subscription(sender, 'day_reminders'))!;
+    assert.equal(current.problem, null);
+    assert.equal(current.enabled, true);
+    assert.equal(current.revision, sub.revision);
+    assert.equal((await f.n.warnings(sender)).length, 0);
+    assert.match((await f.n.status(sender)).text, /Lembretes do Day: ativo/);
+  } finally { await f.store.close(); }
+});
+
+test('revoked consent and temporary outage show different recovery instructions without asking to resubscribe', async () => {
+  const f = await fixture();
+  try {
+    await f.subscribe();
+    const now = Date.now() + 1000;
+    f.state.authorized = false;
+    await f.n.tick(now);
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, 'day_consent');
+    assert.match((await f.n.status(sender)).text, /https:\/\/day.example.test\/hub\/reminders/);
+    f.state.authorized = true;
+    f.state.pollError = new Error('network failure with secret');
+    await f.n.tick(now + 61000);
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, 'day_unavailable');
+    assert.match((await f.n.status(sender)).text, /tentará novamente automaticamente/);
+    assert(!JSON.stringify(await f.n.status(sender)).includes('network failure'));
+    f.state.pollError = null;
+    await f.n.tick(now + 122000);
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, null);
+  } finally { await f.store.close(); }
+});
+
+test('next conversation receives one durable warning per problem, without unsolicited messages or cross-sender exposure', async () => {
+  const f = await fixture();
+  try {
+    await f.subscribe();
+    const now = Date.now() + 1000;
+    f.state.pollError = new ConnectionAccessError('revoked');
+    await f.n.tick(now);
+    assert.equal((await f.store.db.query('SELECT count(*)::int n FROM outbox')).rows[0].n, 0);
+    assert.equal((await f.n.warnings('bob')).length, 0);
+    const sent: any[] = [];
+    const worker = new Worker(f.store, { handle: async () => [{ text: 'Resposta normal' }], notifications: f.n } as any, {
+      withTypingIndicator: async (_id: string, work: () => Promise<any>) => work(),
+      send: async (_sender: string, reply: any) => { sent.push(reply); },
+    } as any);
+    await f.store.enqueue({ id: 'warning-message', sender, text: 'oi', timestamp: Date.now() / 1000 });
+    await worker.tick();
+    assert.equal(sent.length, 2);
+    assert.match(sent[1].text, /perdeu a autorização/);
+    await f.n.tick(now + 61000);
+    await f.store.enqueue({ id: 'second-message', sender, text: 'saldo', timestamp: Date.now() / 1000 });
+    await worker.tick();
+    assert.equal(sent.length, 3);
+    assert.equal((await f.n.warnings(sender)).length, 0);
+    // An old warning cannot reappear after opt-out or recovery.
+    f.state.pollError = null;
+    await f.n.tick(now + 122000);
+    f.state.pollError = new ConnectionAccessError('revoked again');
+    await f.n.tick(now + 153000);
+    const warnings = await f.n.warnings(sender);
+    assert.equal(warnings.length, 1);
+    await f.n.db.pause(sender);
+    const message = { id: 'cancelled-warning', sender, text: 'oi', timestamp: Date.now() / 1000 };
+    await f.store.enqueue(message); await f.store.nextMessage();
+    await f.store.complete(message, [{ text: 'ok' }], warnings);
+    assert.equal((await f.store.db.query("SELECT count(*)::int n FROM outbox WHERE state='pending'")).rows[0].n, 1);
+  } finally { await f.store.close(); }
+});
+
+test('warning acknowledgement rolls back with the reply and the status response does not duplicate the warning', async () => {
+  const f = await fixture();
+  try {
+    const sub = await f.subscribe();
+    await f.n.db.problem(sub, 'day_access');
+    const warnings = await f.n.warnings(sender);
+    const message = { id: 'atomic-warning', sender, text: 'minhas assinaturas', timestamp: Date.now() / 1000 };
+    await f.store.enqueue(message); await f.store.nextMessage();
+    const circular: any = { text: 'broken' }; circular.self = circular;
+    await assert.rejects(f.store.complete(message, [circular], warnings));
+    assert.equal((await f.n.warnings(sender)).length, 1);
+    await f.store.complete(message, [await f.n.status(sender)], warnings);
+    assert.equal((await f.store.db.query('SELECT count(*)::int n FROM outbox')).rows[0].n, 1);
+    assert.equal((await f.n.warnings(sender)).length, 0);
+  } finally { await f.store.close(); }
+});
+
+test('a Meta authorization failure is not reported as a Day connection failure', async () => {
+  const f = await fixture();
+  try {
+    const sub = await f.subscribe(), now = Date.now() + 1000;
+    f.n.transport.approved = async () => { throw new HttpError(401); };
+    await f.n.db.enqueue(sub, 'meta-failure', now, 300000, {});
+    await f.n.tick(now);
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, null);
+    assert.equal((await f.n.warnings(sender)).length, 0);
+    assert.equal((await f.n.db.history(sender))[0].state, 'skipped');
+    assert.equal(f.state.sent.length, 0);
+  } finally { await f.store.close(); }
+});
+
+test('reconnection confirmation does not append a stale request to reconnect before checking the new access', async () => {
+  const f = await fixture();
+  try {
+    const sub = await f.subscribe();
+    await f.n.db.problem(sub, 'day_access');
+    const sent: any[] = [];
+    const worker = new Worker(f.store, {
+      handle: async () => { await f.connect(); return [{ text: 'Mesma conta reconectada. O Hub verificará o acesso.' }]; },
+      notifications: f.n,
+    } as any, {
+      withTypingIndicator: async (_id: string, work: () => Promise<any>) => work(),
+      send: async (_sender: string, reply: any) => { sent.push(reply); },
+    } as any);
+    await f.store.enqueue({ id: 'reconnected', sender, button: 'hub:approve:confirmation', text: '', timestamp: Date.now() / 1000 });
+    await worker.tick();
+    assert.equal(sent.length, 1);
+    assert(!sent[0].text.includes('perdeu a autorização'));
+    assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, null);
+  } finally { await f.store.close(); }
 });

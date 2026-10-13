@@ -7,6 +7,7 @@ import { createPool, readDatabaseConfig } from '../src/database.js';
 import { migrate, schemaVersion } from '../src/migrations.js';
 import { Worker } from '../src/worker.js';
 import type { Connection, Reply } from '../src/types.js';
+import { NotificationStore } from '../src/notification-store.js';
 
 const key = randomBytes(32).toString('base64');
 const message = { id: 'wamid.pg', sender: 'alice', text: 'oi', timestamp: Date.now() / 1000 };
@@ -35,6 +36,29 @@ test('migrations are repeatable and do not reset persisted encrypted connections
     assert.match((await store.connection('alice', 'day'))!.grantId!, /^[A-Za-z0-9_-]{43}$/);
     assert.deepEqual({ ...(await store.connection('alice', 'day')), grantId: undefined }, { ...connection, grantId: undefined });
     assert.equal((await store.db.query('SELECT count(*)::int AS n FROM hub_schema_migrations')).rows[0].n, 0);
+  } finally { await store.close(); }
+});
+
+test('health-state migration upgrades existing subscriptions without changing consent or activation', async () => {
+  const store = await createTestStore(key);
+  try {
+    await store.connect(connection);
+    const c = (await store.connection('alice', 'day'))!;
+    const n = new NotificationStore(store);
+    const preferences = { time: '00:00', timeZone: 'America/Sao_Paulo', sources: ['day'] as const,
+      consentAt: 123, since: 123, accounts: { day: JSON.stringify([c.accountId, c.grantId]) } };
+    await n.save('alice', 'day_reminders', { ...preferences, sources: [...preferences.sources] });
+    // Reproduce the previous schema only inside this disposable test schema.
+    await store.db.query('ALTER TABLE notification_subscriptions DROP COLUMN problem, DROP COLUMN problem_since, DROP COLUMN problem_notified_at');
+    await store.db.query('DELETE FROM hub_schema_migrations WHERE version=5');
+    await migrate(store.db);
+    const upgraded = (await n.subscription('alice', 'day_reminders'))!;
+    assert.equal(upgraded.enabled, true);
+    assert.equal(upgraded.revision, 1);
+    assert.deepEqual(upgraded.data, preferences);
+    assert.equal(upgraded.problem, null);
+    assert.equal(upgraded.problemNotifiedAt, 0);
+    assert.equal((await store.connection('alice', 'day'))!.tokens.refresh_token, c.tokens.refresh_token);
   } finally { await store.close(); }
 });
 

@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 4;
+export const schemaVersion = 5;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -97,6 +97,13 @@ export async function migrate(pool: Pool) {
       CREATE UNIQUE INDEX guest_favorite_drafts_pending ON guest_favorite_drafts(sender) WHERE state='pending';
       CREATE INDEX guest_favorite_drafts_expiry ON guest_favorite_drafts(expires);
       INSERT INTO hub_schema_migrations(version) VALUES(4);`);
+    }
+    if (!rows.some(row => row.version === 5)) {
+      await client.query(`ALTER TABLE notification_subscriptions
+        ADD COLUMN problem TEXT CHECK(problem IN ('connection_changed','day_access','day_consent','day_unavailable')),
+        ADD COLUMN problem_since BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN problem_notified_at BIGINT NOT NULL DEFAULT 0;
+        INSERT INTO hub_schema_migrations(version) VALUES(5);`);
     }
   });
 }

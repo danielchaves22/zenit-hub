@@ -8,3 +8,5 @@ export type Tokens = { access_token: string; refresh_token: string; expires_at: 
 export type Connection = { sender: string; provider: Provider; accountId: string; label: string; tokens: Tokens; grantId?: string };
 export type Fetch = typeof fetch;
 export class PublicError extends Error {}
+export class ConnectionAccessError extends PublicError {}
+export class ReminderConsentError extends PublicError {}

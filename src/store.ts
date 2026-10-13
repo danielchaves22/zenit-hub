@@ -3,6 +3,8 @@ import { transaction } from './database.js';
 import { schemaVersion } from './migrations.js';
 import { digest, randomToken, Vault } from './security.js';
 import type { Connection, Incoming, Provider, Reply, Tokens } from './types.js';
+import type { Preferences } from './notification-store.js';
+import type { NotificationWarning } from './notification-problems.js';
 
 type LinkRow = { sender: string; provider: Provider; data: string; hash: string };
 export class Store {
@@ -58,12 +60,32 @@ export class Store {
     return rows[0] ? this.vault.open(rows[0].data, `connection:${sender}:${provider}`) : null;
   }
   private async saveConnection(client: Pool | PoolClient, c: Connection) {
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1),903282)', [c.sender]);
+    const { rows } = await client.query('SELECT data FROM connections WHERE sender=$1 AND provider=$2 FOR UPDATE', [c.sender, c.provider]);
+    const previous = rows[0] ? this.vault.open<Connection>(rows[0].data, `connection:${c.sender}:${c.provider}`) : null;
+    const sameAccount = previous?.accountId === c.accountId;
+    // The grant binds subscriptions and occurrence IDs to an account. Preserve it
+    // on reauthorization so consent, opt-outs and delivery deduplication survive.
+    const grantId = sameAccount ? previous.grantId : randomToken();
     await client.query(`INSERT INTO connections(sender,provider,data) VALUES($1,$2,$3)
       ON CONFLICT(sender,provider) DO UPDATE SET data=EXCLUDED.data`,
-    [c.sender, c.provider, this.vault.seal({ ...c, grantId: randomToken() }, `connection:${c.sender}:${c.provider}`)]);
-    await client.query("UPDATE notification_subscriptions SET enabled=false,revision=revision+1 WHERE sender=$1", [c.sender]);
+    [c.sender, c.provider, this.vault.seal({ ...c, grantId }, `connection:${c.sender}:${c.provider}`)]);
+    const paused = sameAccount ? [] : await this.pauseProviderSubscriptions(client, c.sender, c.provider);
+    // Do not erase an access warning until an authenticated poll actually succeeds.
+    if (sameAccount) await client.query('UPDATE notification_subscriptions SET next_check=LEAST(next_check,$2) WHERE sender=$1 AND enabled', [c.sender, Date.now()]);
     await client.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
     if (c.provider === 'calendar') await client.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
+    return { sameAccount, paused };
+  }
+  private async pauseProviderSubscriptions(client: Pool | PoolClient, sender: string, provider: Provider) {
+    const { rows } = await client.query('SELECT kind,data FROM notification_subscriptions WHERE sender=$1 AND enabled FOR UPDATE', [sender]);
+    const affected = rows.filter(row => this.vault.open<Preferences>(row.data, `subscription:${sender}:${row.kind}`).sources.includes(provider)).map(row => row.kind as string);
+    if (affected.length) {
+      await client.query(`UPDATE notification_subscriptions SET enabled=false,revision=revision+1,updated=$3,
+        problem='connection_changed',problem_since=$3,problem_notified_at=0 WHERE sender=$1 AND kind=ANY($2::text[])`, [sender, affected, Date.now()]);
+      await client.query("UPDATE notification_deliveries SET state='skipped',reason='subscription_changed' WHERE sender=$1 AND kind=ANY($2::text[]) AND state='pending'", [sender, affected]);
+    }
+    return affected;
   }
   async connect(c: Connection) { await transaction(this.db, tx => this.saveConnection(tx, c)); }
   async refreshConnection(previous: Connection, tokens: Tokens): Promise<Connection | null> {
@@ -79,10 +101,11 @@ export class Store {
   }
   async disconnect(sender: string, provider: Provider) {
     await transaction(this.db, async tx => {
+      await tx.query('SELECT pg_advisory_xact_lock(hashtext($1),903282)', [sender]);
       await tx.query('DELETE FROM oauth_links WHERE sender=$1 AND provider=$2', [sender, provider]);
       await tx.query('DELETE FROM connections WHERE sender=$1 AND provider=$2', [sender, provider]);
       await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
-      await tx.query("UPDATE notification_subscriptions SET enabled=false,revision=revision+1 WHERE sender=$1", [sender]);
+      await this.pauseProviderSubscriptions(tx, sender, provider);
       await tx.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
       if (provider === 'calendar') await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
     });
@@ -169,11 +192,13 @@ export class Store {
       const { rows } = await tx.query<LinkRow>(`DELETE FROM oauth_links WHERE hash=$1 AND sender=$2
         AND phase='confirmation' AND expires>$3 RETURNING *`, [digest(token), sender, Date.now()]);
       const pending = this.openLink(rows[0]);
+      if (!pending) return null;
+      let notificationChange;
       if (pending && approved) {
-        await this.saveConnection(tx, pending.data as Connection);
+        notificationChange = await this.saveConnection(tx, pending.data as Connection);
         await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
       }
-      return pending;
+      return { ...pending, notificationChange };
     });
   }
   async cancelLinks(sender: string, provider: Provider) {
@@ -189,11 +214,19 @@ export class Store {
       SELECT id FROM inbox WHERE state='pending' ORDER BY sequence LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id,data`);
     return rows[0] ? this.vault.open(rows[0].data, `inbox:${rows[0].id}`) : null;
   }
-  async complete(message: Incoming, replies: Reply[]) {
+  async complete(message: Incoming, replies: Reply[], warnings: NotificationWarning[] = []) {
     await transaction(this.db, async tx => {
       const result = await tx.query("UPDATE inbox SET state='done' WHERE id=$1 AND state='processing' RETURNING id", [message.id]);
       if (!result.rowCount) throw new Error('A mensagem não está em processamento.');
       for (const reply of replies) await this.insertReply(tx, message.sender, reply);
+      // Mark a notice only in the same transaction that durably queues it.
+      for (const warning of warnings) {
+        const claimed = await tx.query(`UPDATE notification_subscriptions SET problem_notified_at=$6
+          WHERE sender=$1 AND kind=$2 AND revision=$3 AND problem=$4 AND problem_since=$5 AND problem_notified_at=0`,
+        [message.sender, warning.kind, warning.revision, warning.problem, warning.since, Date.now()]);
+        if (claimed.rowCount && !replies.some(reply => reply.text.includes(warning.detail)))
+          await this.insertReply(tx, message.sender, { text: warning.text });
+      }
     });
   }
   async fail(id: string) { await this.db.query("UPDATE inbox SET state='uncertain' WHERE id=$1 AND state='processing'", [id]); }

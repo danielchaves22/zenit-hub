@@ -5,6 +5,8 @@ import { readConfig } from '../src/config.js';
 import { Store } from '../src/store.js';
 import { createTestStore } from './database-helper.js';
 import { OAuth, googleScopes } from '../src/oauth.js';
+import { ConnectionAccessError } from '../src/types.js';
+import { NotificationStore } from '../src/notification-store.js';
 const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
   GOOGLE_CLIENT_ID: 'client', GOOGLE_CLIENT_SECRET: 'secret', DAY_SUPABASE_URL: 'https://example.supabase.co',
   DAY_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test', DAY_CLIENT_ID: 'day-client', DAY_CLIENT_SECRET: 'day-secret' });
@@ -85,5 +87,50 @@ test('Google grants require explicit event-write and calendar-list scopes before
       await assert.rejects(oauth.finish('calendar', state, 'browser', 'code'), /Conceda acesso/);
       assert.equal(await store.connection('alice', 'calendar'), null);
     }
+  } finally { await store.close(); }
+});
+
+test('automatic refresh preserves subscribed grants and distinguishes revoked tokens from service failures', async () => {
+  const { store } = await setup();
+  try {
+    await store.connect({ sender: 'alice', provider: 'day', accountId: 'account-123', label: 'alice',
+      tokens: { access_token: 'old', refresh_token: 'refresh', expires_at: 0 } });
+    const original = (await store.connection('alice', 'day'))!;
+    const notifications = new NotificationStore(store);
+    await notifications.save('alice', 'day_reminders', { time: '00:00', timeZone: 'America/Sao_Paulo', sources: ['day'],
+      consentAt: Date.now(), since: Date.now(), accounts: { day: JSON.stringify([original.accountId, original.grantId]) } });
+    let mode = 'invalid_grant';
+    const oauth = new OAuth(config, store, async () => mode === 'success'
+      ? response({ access_token: 'new', refresh_token: 'rotated', expires_in: 3600 })
+      : new Response(JSON.stringify({ error: mode, error_description: 'private diagnostic and secret' }), { status: mode === 'invalid_grant' ? 400 : mode === 'invalid_client' ? 401 : 503 }));
+    await assert.rejects(oauth.connection('alice', 'day'), (error: any) => error instanceof ConnectionAccessError && /conectar Day/.test(error.message) && !error.message.includes('private'));
+    mode = 'invalid_client';
+    await assert.rejects(oauth.connection('alice', 'day'), error => !(error instanceof ConnectionAccessError));
+    mode = 'unavailable';
+    await assert.rejects(oauth.connection('alice', 'day'), error => !(error instanceof ConnectionAccessError));
+    mode = 'success';
+    const refreshed = await oauth.connection('alice', 'day');
+    assert.equal(refreshed.tokens.refresh_token, 'rotated');
+    assert.equal(refreshed.grantId, original.grantId);
+    assert.equal((await notifications.subscription('alice', 'day_reminders'))!.enabled, true);
+    assert.equal((await notifications.subscription('alice', 'day_reminders'))!.revision, 1);
+  } finally { await store.close(); }
+});
+
+test('OAuth confirmation explains preserved subscriptions and account-change pauses', async () => {
+  const { store, oauth } = await setup();
+  try {
+    const c = { sender: 'alice', provider: 'day' as const, accountId: 'a', label: 'a@example.test',
+      tokens: { access_token: 'access', refresh_token: 'refresh', expires_at: Date.now() + 3600000 } };
+    await store.connect(c);
+    const connected = (await store.connection('alice', 'day'))!;
+    const n = new NotificationStore(store);
+    await n.save('alice', 'day_reminders', { time: '00:00', timeZone: 'America/Sao_Paulo', sources: ['day'], consentAt: 1, since: 1,
+      accounts: { day: JSON.stringify([connected.accountId, connected.grantId]) } });
+    await store.link('same', 'alice', 'day', c, 'confirmation');
+    assert.match(await oauth.approve('alice', 'same', true), /Mesma conta reconectada.*horários foram preservados/);
+    await store.link('other', 'alice', 'day', { ...c, accountId: 'b' }, 'confirmation');
+    assert.match(await oauth.approve('alice', 'other', true), /conta anterior foram pausadas/);
+    assert.equal((await n.subscription('alice', 'day_reminders'))!.enabled, false);
   } finally { await store.close(); }
 });

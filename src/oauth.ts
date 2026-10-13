@@ -2,8 +2,8 @@ import { z } from 'zod';
 import type { Config } from './config.js';
 import { Store } from './store.js';
 import { challenge, digest, equal, randomToken } from './security.js';
-import { jsonRequest } from './http.js';
-import { PublicError, type Connection, type Fetch, type Provider, type Tokens } from './types.js';
+import { HttpError, jsonRequest } from './http.js';
+import { ConnectionAccessError, PublicError, type Connection, type Fetch, type Provider, type Tokens } from './types.js';
 
 export const googleScopes = ['openid', 'email', 'https://www.googleapis.com/auth/calendar.events',
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly'];
@@ -84,16 +84,32 @@ export class OAuth {
   async approve(sender: string, token: string, approved: boolean) {
     const pending = await this.store.approveLink(sender, token, approved);
     if (!pending) throw new PublicError('Esta confirmação expirou ou pertence a outra conversa.');
-    return approved ? `${pending.provider === 'day' ? 'Day' : 'Google Calendar'} conectado. Suas outras conexões continuam ativas.` : 'Conexão cancelada.';
+    if (!approved) return 'Conexão cancelada.';
+    const change = pending.notificationChange;
+    const note = change?.paused.length
+      ? '\nAs assinaturas que usavam a conta anterior foram pausadas. Envie “notificações” e confirme as fontes para retomar. As demais assinaturas foram preservadas.'
+      : change?.sameAccount
+        ? '\nMesma conta reconectada. As assinaturas e os horários foram preservados, inclusive as pausas que você escolheu. O Hub verificará novamente o acesso; consulte “minhas assinaturas”.'
+        : '\nSuas assinaturas existentes foram preservadas. Conectar uma aplicação não assina notificações automaticamente.';
+    return `${pending.provider === 'day' ? 'Day' : 'Google Calendar'} conectado. Suas outras conexões continuam ativas.${note}`;
   }
   async connection(sender: string, provider: Provider) {
     const connection = await this.store.connection(sender, provider);
-    if (!connection) throw new PublicError(`Conecte ${provider === 'day' ? 'o Day' : 'o Calendar'} primeiro.`);
+    if (!connection) throw new ConnectionAccessError(`Conecte ${provider === 'day' ? 'o Day' : 'o Calendar'} primeiro.`);
     if (connection.tokens.expires_at > Date.now() + 60_000) return connection;
     const key = `${sender}:${provider}`;
     if (!this.refreshing.has(key)) {
       const work = (async () => {
-        const tokens = await this.exchange(provider, { grant_type: 'refresh_token', refresh_token: connection.tokens.refresh_token }, connection.tokens);
+        let tokens: Tokens;
+        try {
+          tokens = await this.exchange(provider, { grant_type: 'refresh_token', refresh_token: connection.tokens.refresh_token }, connection.tokens);
+        } catch (error) {
+          if (error instanceof HttpError && error.code !== 'invalid_client' &&
+            ([401, 403].includes(error.status) || ['invalid_grant', 'refresh_token_not_found', 'refresh_token_already_used'].includes(error.code || ''))) {
+            throw new ConnectionAccessError(`O acesso ao ${provider === 'day' ? 'Day' : 'Calendar'} expirou ou foi revogado. Envie “conectar ${provider === 'day' ? 'Day' : 'Calendar'}” para autorizar novamente.`);
+          }
+          throw error;
+        }
         const refreshed = await this.store.refreshConnection(connection, tokens);
         if (!refreshed) {
           throw new PublicError('A conexão foi alterada. Faça a consulta novamente.');

@@ -31,6 +31,8 @@ Siga a [preparação do Day](https://github.com/danielchaves22/zenit-day/blob/ma
 
 Configure `DAY_SUPABASE_URL`, `DAY_SITE_URL` (origem HTTPS da tela de consentimento), chave **publicável**, `DAY_CLIENT_ID` e `DAY_CLIENT_SECRET` no Hub. A senha do usuário é enviada pelo navegador diretamente ao Auth do Day. O Hub recebe somente a autorização OAuth. Não use `service_role` ou chave secreta administrativa. O Hub testa a capacidade `zenit_day_hub_connection_check` antes de aceitar a conexão.
 
+A renovação de acesso é automática. Reautorizar a mesma conta preserva as assinaturas existentes, sem reativar pausas voluntárias. Trocar a conta ou desconectar pausa somente as assinaturas dependentes da fonte alterada. Erros de acesso aos lembretes são persistidos e apresentados em `minhas assinaturas` e na próxima conversa, com indicação de reconexão, novo consentimento ou tentativa automática conforme o motivo. Veja [Notificações](NOTIFICACOES.md).
+
 As consultas retornam somente dados sincronizados; alterações offline ainda não enviadas pelo Day não aparecem.
 
 Assuntos continuam somente leitura. Para consultar/gerenciar lembretes, a página `/hub/reminders` do Day concede autorização específica e revogável; o cliente deve estar permitido na configuração privada do Day. Essa autorização é independente da assinatura de envio no WhatsApp. Os escopos de identidade OAuth não liberam tabelas: as políticas RLS e as RPCs verificam o usuário, o cliente OAuth e o consentimento aplicável. Consulte [Lembretes](https://github.com/danielchaves22/zenit-day/blob/master/docs/LEMBRETES.md) e a [segurança de tokens do Supabase](https://supabase.com/docs/guides/auth/oauth-server/token-security).

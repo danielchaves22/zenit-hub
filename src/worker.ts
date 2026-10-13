@@ -21,7 +21,11 @@ export class Worker {
         const replies = message.text || message.button || message.audio || message.flowReply
           ? await this.whatsapp.withTypingIndicator(message.id, () => this.assistant.handle(message))
           : [{ text: 'Envie texto ou uma mensagem de voz para consultar suas conexões.' }];
-        await this.store.complete(message, replies);
+        // The confirmation explains that access will be rechecked. Do not append
+        // the old "reconnect" warning before the post-message poll can verify it.
+        const warnings = message.button?.startsWith('hub:approve:') ? []
+          : await this.assistant.notifications?.warnings(message.sender) ?? [];
+        await this.store.complete(message, replies, warnings);
       } catch (error) {
         await this.store.fail(message.id);
         await this.store.sendLater(message.sender, { text: error instanceof PublicError ? error.message : 'Não foi possível concluir. Consulte o estado antes de repetir uma operação.' });
