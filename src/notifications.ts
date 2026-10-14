@@ -16,6 +16,10 @@ import {
   type Delivery,
 } from './notification-store.js';
 import { NotificationTransport } from './notification-transport.js';
+import { ReminderQueue } from './reminder-queue.js';
+import { ReminderRunner } from './reminder-runner.js';
+import { NotificationDialogs, type ReminderDraft, type QuietDraft } from './notification-dialogs.js';
+import { quietHoursLabel, quietUntil } from './quiet-hours.js';
 
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const notificationChange = z
@@ -46,19 +50,12 @@ export const reminderChange = z
     id: z.string().uuid().nullable(),
     title: z.string().trim().min(1).max(500).nullable(),
     schedule: reminderSchedule.nullable(),
+    requiresConfirmation: z.boolean().nullable().default(null),
+    repeatMinutes: z.number().int().min(1).max(10080).nullable().default(null),
+    respectQuietHours: z.boolean().nullable().default(null),
   })
   .strict();
-type Draft =
-  | { type: 'subscription'; kind: NotificationKind; data: Preferences }
-  | {
-      type: 'reminder';
-      account: string;
-      operationId: string;
-      id: string;
-      revision: number;
-      doc: any;
-      operation: string;
-    };
+type Draft = { type: 'subscription'; kind: NotificationKind; data: Preferences } | ReminderDraft | QuietDraft;
 const names: Record<NotificationKind, string> = {
   daily_summary: 'Resumo diário',
   day_reminders: 'Lembretes do Day',
@@ -81,6 +78,9 @@ const dayProblem = (error: unknown): NotificationProblem =>
 
 export class Notifications {
   readonly db: NotificationStore;
+  readonly queue: ReminderQueue;
+  readonly dialogs: NotificationDialogs;
+  readonly reminders: ReminderRunner;
   private ticking = false;
   constructor(
     readonly config: Config,
@@ -91,6 +91,9 @@ export class Notifications {
     readonly transport = new NotificationTransport(config),
   ) {
     this.db = new NotificationStore(store);
+    this.queue = new ReminderQueue(store);
+    this.dialogs = new NotificationDialogs(this.db,this.queue,config.timeZone,(sender,data,text)=>this.draft(sender,data,text));
+    this.reminders = new ReminderRunner(this.queue,this.db,day,transport,(s,error,now)=>this.db.problem(s,dayProblem(error),now));
   }
   private async accounts(sender: string, sources: Preferences['sources']) {
     const accounts: Record<string, string> = {};
@@ -151,6 +154,8 @@ export class Notifications {
         return `• ${names[kind]}: ${s ? this.subscriptionState(s) + (kind === 'daily_summary' ? ` — ${s.data.time} (${s.data.timeZone})` : '') : 'não assinado'}. ${ready ? 'Modelo de envio aprovado no WhatsApp.' : 'Envio aguardando configuração/aprovação no WhatsApp.'}`;
       }),
     );
+    lines.push(await this.confirmationAvailability());
+    lines.push(`Silêncio: ${quietHoursLabel(await this.queue.settings(sender))}. Envie “configurar silêncio” para escolher início e fim.`);
     return {
       text: `Zenit Hub — notificações\n\n${lines.join('\n')}\n\nO resumo reúne agenda, contas vencendo e tarefas das fontes escolhidas. Peça “quero o resumo diário às 7h” e confirme pelo botão.\n\nOs lembretes recorrentes ficam no Day. Peça “ativar lembretes do Day” para autorizar e assinar o envio. Depois você pode criar, listar, editar, pausar ou excluir pelo chat ou pelo Day.\n\nPara pausar tudo, envie “parar notificações”. Conectar uma aplicação não assina avisos automaticamente.`,
       buttons: [
@@ -163,6 +168,8 @@ export class Notifications {
   async status(sender: string): Promise<Reply> {
     const list = await this.db.list(sender),
       history = await this.db.history(sender);
+    const queue = await this.queue.status(sender);
+    const quiet = `\n\nPeríodo de silêncio: ${quietHoursLabel(await this.queue.settings(sender))}. Envie “configurar silêncio” para alterá-lo.\nLembretes na fila: ${queue.pending}; aguardando o fim do silêncio: ${queue.quiet}; com confirmação pendente: ${queue.awaiting}; conclusões aguardando sincronização: ${queue.syncing}. O estado de entrega consta abaixo.\n${await this.confirmationAvailability()}`;
     const states: Record<string, string> = {
       accepted: 'aceito pelo WhatsApp',
       delivered: 'entregue',
@@ -184,7 +191,7 @@ export class Notifications {
       send_failed: 'não foi possível confirmar se o WhatsApp aceitou o envio',
     };
     return {
-      text: `Minhas notificações\n${list.map((s) => `${names[s.kind]}: ${this.subscriptionState(s)}${s.kind === 'daily_summary' ? ` — ${s.data.time}, ${s.data.timeZone}; fontes: ${s.data.sources.join(', ')}` : ''}`).join('\n') || 'Nenhuma assinatura.'}\n\nÚltimos avisos:\n${history.map((h) => `${names[h.kind as NotificationKind]} — ${display(Number(h.due), this.config.timeZone)}: ${states[h.state] || h.state}${reasons[h.reason] ? ` (${reasons[h.reason]})` : ''}`).join('\n') || 'Nenhum envio registrado ainda.'}\n\nEnvie “parar notificações”, “cancelar resumo diário” ou “cancelar lembretes do Day”. Para retomar uma assinatura pausada, peça a assinatura novamente. Falhas de acesso não cancelam a assinatura; siga a orientação acima.`,
+      text: `Minhas notificações\n${list.map((s) => `${names[s.kind]}: ${this.subscriptionState(s)}${s.kind === 'daily_summary' ? ` — ${s.data.time}, ${s.data.timeZone}; fontes: ${s.data.sources.join(', ')}` : ''}`).join('\n') || 'Nenhuma assinatura.'}${quiet}\n\nÚltimos avisos:\n${history.map((h) => `${names[h.kind as NotificationKind]} — ${display(Number(h.due), this.config.timeZone)}: ${states[h.state] || h.state}${reasons[h.reason] ? ` (${reasons[h.reason]})` : ''}`).join('\n') || 'Nenhum envio registrado ainda.'}\n\nEnvie “parar notificações”, “cancelar resumo diário” ou “cancelar lembretes do Day”. Para retomar uma assinatura pausada, peça a assinatura novamente. Falhas de acesso não cancelam a assinatura; siga a orientação acima.`,
     };
   }
   async daySetup(sender: string): Promise<Reply> {
@@ -201,9 +208,20 @@ export class Notifications {
       sources: ['day'],
     });
   }
+  private async confirmationAvailability() {
+    try {
+      return await this.transport.approved('day_reminders',false,true)
+        ? 'Lembretes com botão Concluído: modelo aprovado no WhatsApp.'
+        : 'Lembretes com botão Concluído: envio aguardando configuração/aprovação do modelo no WhatsApp; os lembretes sem confirmação usam outro modelo.';
+    } catch {return 'Lembretes com botão Concluído: não foi possível verificar a disponibilidade do modelo no WhatsApp agora.';}
+  }
   async command(sender: string, command: string, button?: string): Promise<Reply | null> {
+    const completion=/^hub:done:([A-Za-z0-9_-]{43})$/.exec(button||'');
+    if(completion) return this.reminders.acknowledge(sender,completion[1]);
     const decision = /^hub:notify:(confirm|cancel):([A-Za-z0-9_-]{43})$/.exec(button || '');
     if (decision) return this.confirm(sender, decision[2], decision[1] === 'confirm');
+    const guided=await this.dialogs.command(sender,command,button);
+    if(guided) return guided;
     if (button === 'hub:notify:summary')
       return {
         text: 'Em qual horário você quer receber o resumo diário? Exemplo: “Quero o resumo diário às 7h com Cash, Day e Calendar”. Você verá o horário, fuso e fontes antes de confirmar.',
@@ -305,7 +323,8 @@ export class Notifications {
     if (a.operation === 'create') {
       if (a.id || !a.title || !a.schedule)
         throw new PublicError('Informe texto, frequência e horários do lembrete.');
-      doc = { title: a.title, subject_id: null, enabled: true, deleted: false, schedule: a.schedule };
+      doc = { title: a.title, subject_id: null, enabled: true, deleted: false, schedule: a.schedule,
+        requires_confirmation:false,repeat_minutes:5,respect_quiet_hours:true };
     } else {
       if (!a.id || !seen.has(a.id))
         throw new PublicError('Consulte a lista de lembretes nesta solicitação antes de alterar um deles.');
@@ -318,6 +337,9 @@ export class Notifications {
         enabled: r.enabled,
         deleted: r.deleted,
         schedule: r.schedule,
+        requires_confirmation:r.requires_confirmation??false,
+        repeat_minutes:r.repeat_minutes??5,
+        respect_quiet_hours:r.respect_quiet_hours??true,
       };
       if (a.operation === 'update') {
         if (a.title) doc.title = a.title;
@@ -328,6 +350,11 @@ export class Notifications {
         doc.enabled = a.operation === 'resume';
         doc.deleted = a.operation === 'delete';
       }
+    }
+    if(a.operation==='create'||a.operation==='update') {
+      if(a.requiresConfirmation!==null) doc.requires_confirmation=a.requiresConfirmation;
+      if(a.repeatMinutes!==null) doc.repeat_minutes=a.repeatMinutes;
+      if(a.respectQuietHours!==null) doc.respect_quiet_hours=a.respectQuietHours;
     }
     const next = doc.enabled ? await this.day.previewReminder(sender, doc.schedule) : [];
     if (doc.enabled && !next.length)
@@ -343,7 +370,10 @@ export class Notifications {
             ? `Dia ${s.monthDay} de cada mês (último dia se o mês for menor)`
             : `A cada ${s.intervalMinutes} minutos${s.windowStart ? `, das ${s.windowStart} às ${s.windowEnd}` : ', desde o início, inclusive à noite'}`;
     const sub = await this.db.subscription(sender, 'day_reminders');
-    return this.draft(
+    const review = this.draft.bind(this);
+    const prepare = a.operation==='create'||a.operation==='update'
+      ? this.dialogs.beginReminder.bind(this.dialogs) : review;
+    return prepare(
       sender,
       { type: 'reminder', account, id, revision, doc, operation: a.operation, operationId: randomUUID() },
       `Revisar lembrete no Day\n${doc.title}\n${frequency}${s.kind !== 'interval' ? `, ${s.times.join(', ')}` : ''}\nFuso: ${s.timeZone}\nInício: ${display(s.startAt, s.timeZone)}${s.endAt ? `\nFim (exclusivo): ${display(s.endAt, s.timeZone)}` : ''}\nEstado após confirmar: ${doc.deleted ? 'excluído' : doc.enabled ? 'ativo' : 'pausado'}\n${next.length ? `Próximos horários: ${next.map((at) => display(at, s.timeZone)).join('; ')}\n` : ''}\n${sub?.enabled ? 'Envio pelo WhatsApp assinado.' : 'Envio pelo WhatsApp não assinado. Para recebê-lo, peça “ativar lembretes do Day”.'}\nConfirme pelo botão para salvar.`,
@@ -373,10 +403,14 @@ export class Notifications {
         reply = {
           text: `${names[draft.kind]} assinado pelo WhatsApp${draft.kind === 'daily_summary' ? ` às ${draft.data.time} (${draft.data.timeZone})` : ''}. Os próximos horários serão considerados; avisos antigos não serão reenviados. Para pausar, envie “parar notificações”.`,
         };
-      } else {
+      } else if(draft.type==='quiet') {
+        await this.queue.saveSettings(sender,draft.data);
+        reply={text:`Período de silêncio ${quietHoursLabel(draft.data)}. As exceções configuradas nos lembretes foram preservadas.`};
+      } else if(draft.type==='reminder') {
         if ((await this.accounts(sender, ['day'])).day !== draft.account)
           throw new PublicError('A conta do Day mudou. Solicite a alteração novamente.');
         await this.day.requireReminders(sender);
+        if(draft.doc.enabled&&draft.doc.requires_confirmation) await this.transport.require('day_reminders',true);
         const result = await this.day.saveReminder(
           sender,
           draft.operationId,
@@ -390,7 +424,7 @@ export class Notifications {
         reply = {
           text: `Lembrete ${draft.doc.deleted ? 'excluído' : draft.doc.enabled ? 'salvo' : 'pausado'} no Day: ${draft.doc.title}.`,
         };
-      }
+      } else throw new PublicError('Conclua primeiro as perguntas sobre o lembrete. Nada foi salvo.');
       await this.db.finish(sender, token, reply);
       return reply;
     } catch (e) {
@@ -432,20 +466,7 @@ export class Notifications {
             for (const r of result.items) {
               const due = Date.parse(r.dueAt);
               if (!Number.isFinite(due) || due <= after || due > now) throw new Error('Invalid occurrence');
-              await this.db.enqueue(
-                s,
-                `${s.data.accounts.day}:${r.id}:${due}`,
-                due,
-                300_000,
-                {
-                  account: s.data.accounts.day,
-                  reminderId: r.id,
-                  reminderRevision: r.revision,
-                  title: r.title,
-                  timeZone: r.timeZone,
-                },
-                now,
-              );
+              await this.queue.remember(s,r,now);
             }
           }
           await this.db.checked(s, now, true);
@@ -454,6 +475,7 @@ export class Notifications {
           console.error('hub.notifications.poll.failed');
         }
       }
+      await this.reminders.tick(now);
       // Bound each tick so incoming messages are not starved by a backlog.
       for (let i = 0; i < 5; i++) {
         const d = await this.db.next(now);
@@ -486,6 +508,13 @@ export class Notifications {
         }
         if (!r || !r.enabled || r.deleted || r.revision !== d.data.reminderRevision) {
           await this.db.mark(d.id, 'skipped', 'reminder_changed');
+          return;
+        }
+        // Pending deliveries created before migration 6 must also respect the
+        // new rules. Move these to the durable occurrence queue before sending.
+        if(r.requires_confirmation || (r.respect_quiet_hours!==false&&quietUntil(now,await this.queue.settings(d.sender))!==null)) {
+          await this.queue.remember(s,{id:r.id,revision:r.revision,title:r.title,timeZone:d.data.timeZone!,dueAt:new Date(d.due).toISOString()},now);
+          await this.db.mark(d.id,'skipped','moved_to_reminder_queue');
           return;
         }
         values = [plain(r.title), `${display(d.due, d.data.timeZone!)} (${d.data.timeZone})`];

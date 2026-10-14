@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 5;
+export const schemaVersion = 6;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -104,6 +104,20 @@ export async function migrate(pool: Pool) {
         ADD COLUMN problem_since BIGINT NOT NULL DEFAULT 0,
         ADD COLUMN problem_notified_at BIGINT NOT NULL DEFAULT 0;
         INSERT INTO hub_schema_migrations(version) VALUES(5);`);
+    }
+    if (!rows.some(row => row.version === 6)) {
+      await client.query(`CREATE TABLE notification_settings(sender TEXT PRIMARY KEY,data TEXT NOT NULL);
+        CREATE TABLE reminder_occurrences(
+          id TEXT PRIMARY KEY,sender TEXT NOT NULL,reminder_key TEXT NOT NULL,
+          revision INTEGER NOT NULL,due BIGINT NOT NULL,next_send BIGINT NOT NULL,
+          valid_until BIGINT,quiet_until BIGINT NOT NULL DEFAULT 0,
+          attempt INTEGER NOT NULL DEFAULT 0,ack_hash TEXT UNIQUE NOT NULL,data TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','completed','superseded','cancelled','finished')),
+          sync_pending BOOLEAN NOT NULL DEFAULT false,updated BIGINT NOT NULL
+        );
+        CREATE INDEX reminder_occurrences_next ON reminder_occurrences(next_send) WHERE state='pending' OR sync_pending;
+        CREATE INDEX reminder_occurrences_owner ON reminder_occurrences(sender,reminder_key,due DESC);
+        INSERT INTO hub_schema_migrations(version) VALUES(6);`);
     }
   });
 }

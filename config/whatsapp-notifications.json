@@ -18,5 +18,18 @@
       "text": "Este é um lembrete que você cadastrou no Zenit Day e escolheu receber pelo WhatsApp.\n\nLembrete: {{1}}\nHorário programado: {{2}}\n\nPara consultar ou alterar, envie: meus lembretes. Para parar estes avisos, envie: cancelar lembretes do Day.",
       "example": { "body_text": [["Separar o livro para devolver na escola", "08/10/2026, 06:30 (America/Sao_Paulo)"]] }
     }]
+  },
+  {
+    "name": "zenit_lembrete_confirmar_v1",
+    "language": "pt_BR",
+    "category": "UTILITY",
+    "components": [{
+      "type": "BODY",
+      "text": "Lembrete pendente do Zenit Day.\n\nLembrete: {{1}}\nHorário programado: {{2}}\n\nVocê escolheu repetir este aviso até concluir. Toque em Concluído quando terminar. Para parar os avisos, envie: cancelar lembretes do Day.",
+      "example": { "body_text": [["Separar o livro para devolver na escola", "15/10/2026, 06:30 (America/Sao_Paulo)"]] }
+    }, {
+      "type": "BUTTONS",
+      "buttons": [{ "type": "QUICK_REPLY", "text": "Concluído" }]
+    }]
   }
 ]

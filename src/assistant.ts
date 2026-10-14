@@ -143,16 +143,16 @@ export class Assistant {
       ? await this.calendar.openGuests(message.sender, guestDecision[2]) : await this.calendar.selectGuests(message.sender, guestDecision[2], []));
     if (['meus convidados', 'convidados favoritos', 'meus favoritos', 'listar favoritos'].includes(command)) return recordGuestReply(await this.guests.listing(message.sender));
     if (command === 'sem convidados') return recordGuestReply(await this.calendar.selectGuestNames(message.sender, []));
-    const guestNumbers = !message.button ? guestNumberChoices(message.text) : null;
-    if (guestNumbers) {
-      const reply = await this.calendar.tryGuestNumbers(message.sender, guestNumbers);
-      if (reply) return recordGuestReply(reply);
-    }
     const notificationReply = await this.notifications.command(message.sender,command,message.button);
     if(notificationReply) {
       await this.store.addHistory(message.sender,'user',message.text||'[Botão de notificações]');
       await this.store.addHistory(message.sender,'assistant',notificationReply.text);
       return [notificationReply];
+    }
+    const guestNumbers = !message.button ? guestNumberChoices(message.text) : null;
+    if (guestNumbers) {
+      const reply = await this.calendar.tryGuestNumbers(message.sender, guestNumbers);
+      if (reply) return recordGuestReply(reply);
     }
     const decision = /^hub:(approve|deny):([A-Za-z0-9_-]{43})$/.exec(message.button || '');
     if (decision) return [{ text: await this.oauth.approve(message.sender, decision[2], decision[1] === 'approve') }];
@@ -195,7 +195,7 @@ export class Assistant {
       return [{ text: `Zenit Hub\nCash: ${cashUnavailable ? 'indisponível no momento' : status(cashConnected)}\nDay: ${status(dayConnected)}\nCalendar: ${status(calendarConnected)}\n\nEscolha uma conexão ou faça sua pergunta. Para remover uma conexão, envie "desconectar Day", "desconectar Calendar" ou "desconectar Cash".`,
         buttons: [{ id: 'hub:connect:cash', title: 'Conectar Cash' }, { id: 'hub:connect:day', title: 'Conectar Day' }, { id: 'hub:connect:calendar', title: 'Conectar Calendar' }] }];
     }
-    const notificationIntent = /notifica|lembret|lembre(?:-|\s)|avis(?:o|e)|resumo diario|assinatur|remedio|antibiotico/.test(normalized)
+    const notificationIntent = /notifica|lembret|lembre(?:-|\s)|avis(?:o|e)|resumo diario|assinatur|remedio|antibiotico|silencio/.test(normalized)
       || (cashConnected && !dayConnected && !calendarConnected && /horário.*resumo diário|assinatura.*confirm|Revisar lembrete/i.test((await this.store.history(message.sender)).at(-1)?.content||''));
     const guestIntent = /favorit|convidad|e-?mail/.test(normalized);
     if (/^(cash:|\/cash\s)/i.test(message.text) || (cashConnected && !dayConnected && !calendarConnected && !notificationIntent && !guestIntent)) {
@@ -214,6 +214,7 @@ export class Assistant {
     const instructions = `Você é o Zenit Hub. Responda em português, de forma breve. Data e hora LOCAIS do usuário: ${now}. Instante atual ISO: ${new Date().toISOString()}. Fuso: ${this.config.timeZone}. Resolva hoje/amanhã a partir dessa data local.
 Use somente as ferramentas disponíveis para dados pessoais. Não invente resultados, contas ou confirmações.
 Texto digitado e fala transcrita têm o mesmo significado e usam as mesmas conexões. As ferramentas disponíveis nesta solicitação definem suas capacidades atuais; uma resposta antiga do assistente financeiro não limita o Hub.
+O período de silêncio é GLOBAL por usuário: quiet_hours_prepare prepara a mudança por botão, inclusive se atravessar meia-noite. Na criação/edição de lembrete, reminder_prepare abre perguntas guiadas: repetir até Concluído (Sim/Não), intervalo inteiro em minutos e respeitar/ignorar silêncio. Repetição até concluir é diferente da recorrência original. Preserve opções não solicitadas; jamais deduza exceção de silêncio porque o título menciona remédio. Só o botão Concluído da ocorrência registra sua conclusão; texto “concluído” sem identificar a ocorrência deve orientar usar o botão da mensagem vigente. A nova ocorrência substitui apenas a pendência anterior DO MESMO lembrete. As perguntas guiadas ainda não salvam nada; aguarde o botão final.
 Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Contas, pagamentos e vencimentos financeiros referem-se ao Cash; assuntos, tarefas e próximos passos referem-se ao Day. Se a intenção continuar ambígua, pergunte. Use o histórico para resolver complementos como "estou falando da agenda", preservando o período solicitado.
 Para consultar um fim de semana, o padrão é sábado e domingo: de sábado às 00:00 até segunda-feira às 00:00 EXCLUSIVA no fuso do usuário. Só inclua sexta ou segunda se o usuário pedir. Confira que os limites da ferramenta correspondem aos dias descritos na resposta.
 Cash mantém cálculos e permissões financeiras. Assuntos e tarefas do Day só permitem leitura. Lembretes do Day permitem gestão com consentimento específico e botão de confirmação. Calendar permite consultar, criar, alterar e excluir eventos comuns; escritas SEMPRE geram uma prévia e dependem do botão de confirmação. Texto "sim" ou "confirmar" não autoriza gravação; oriente usar o botão.
@@ -276,13 +277,14 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
             return recordGuestReply(item.name === 'guest_favorite_prepare' ? await this.guests.prepare(message.sender, args)
               : await this.calendar.selectGuestNames(message.sender, args.names));
           }
-          if(['notification_catalog','notification_status','notification_prepare','notification_pause','reminder_prepare'].includes(item.name)) {
+          if(['notification_catalog','notification_status','notification_prepare','notification_pause','reminder_prepare','quiet_hours_prepare'].includes(item.name)) {
             if(requested.length!==1) throw new PublicError('Envie uma configuração de notificação por vez.');
             let reply: Reply;
             if(item.name==='notification_catalog') reply=await this.notifications.catalog(message.sender);
             else if(item.name==='notification_status') reply=await this.notifications.status(message.sender);
             else if(item.name==='notification_prepare') reply=await this.notifications.prepare(message.sender,args);
             else if(item.name==='reminder_prepare') reply=await this.notifications.prepareReminder(message.sender,args,remindersSeen);
+            else if(item.name==='quiet_hours_prepare') reply=await this.notifications.dialogs.prepareQuiet(message.sender,args);
             else {
               if(!['daily_summary','day_reminders','all'].includes(args.kind)) throw new Error('Invalid subscription');
               await this.notifications.db.pause(message.sender,args.kind==='all'?undefined:args.kind);

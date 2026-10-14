@@ -28,13 +28,15 @@ export class Day {
     await this.requireReminders(sender);const c=await this.oauth.connection(sender,'day');
     const limit=z.number().int().min(1).max(20).parse(filter.limit??20);
     const search=z.string().max(100).nullable().parse(filter.search??null);
-    const p=new URLSearchParams({select:'id,title,subject_id,enabled,deleted,schedule,revision',user_id:`eq.${c.accountId}`,deleted:'eq.false',order:'title.asc,id.asc',limit:String(limit+1)});
+    const p=new URLSearchParams({select:'id,title,subject_id,enabled,deleted,schedule,revision,requires_confirmation,repeat_minutes,respect_quiet_hours',user_id:`eq.${c.accountId}`,deleted:'eq.false',order:'title.asc,id.asc',limit:String(limit+1)});
     if(id) p.set('id',`eq.${z.string().uuid().parse(id)}`);
     if(search) p.set('title',`ilike.%${search.replace(/[%_\\]/g,'\\$&')}%`);
     const rows=await jsonRequest(this.fetcher,`${this.oauth.config.day.url}/rest/v1/zenit_day_reminders?${p}`,{headers:{apikey:this.oauth.config.day.key,Authorization:`Bearer ${c.tokens.access_token}`}});
     if(!Array.isArray(rows)) throw new Error('Invalid reminders');return {items:rows.slice(0,limit),truncated:rows.length>limit};
   }
   occurrences(sender: string,after: number,until: number) { return this.rpc(sender,'zenit_day_reminder_occurrences',{p_after:new Date(after).toISOString(),p_until:new Date(until).toISOString()}); }
+  occurrenceState(sender:string,id:string,revision:number,due:number) { return this.rpc(sender,'zenit_day_reminder_occurrence_state',{p_reminder_id:id,p_revision:revision,p_due_at:new Date(due).toISOString()}); }
+  completeReminder(sender:string,id:string,revision:number,due:number) { return this.rpc(sender,'zenit_day_complete_reminder',{p_reminder_id:id,p_revision:revision,p_due_at:new Date(due).toISOString()}); }
   saveReminder(sender: string,operationId: string,id: string,revision: number,doc: unknown) {
     return this.rpc(sender,'zenit_day_save_reminder',{p_operation_id:operationId,p_reminder_id:id,p_expected_revision:revision,p_reminder:doc});
   }

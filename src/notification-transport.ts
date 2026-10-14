@@ -10,13 +10,14 @@ export class NotificationTransport {
     readonly config: Config,
     private fetcher: Fetch = fetch,
   ) {}
-  name(kind: NotificationKind) {
+  name(kind: NotificationKind, confirmation = false) {
+    if(kind==='day_reminders'&&confirmation) return this.config.notifications.confirmationTemplate;
     return kind === 'daily_summary'
       ? this.config.notifications.summaryTemplate
       : this.config.notifications.reminderTemplate;
   }
-  async approved(kind: NotificationKind, refresh = false) {
-    const name = this.name(kind),
+  async approved(kind: NotificationKind, refresh = false, confirmation = false) {
+    const name = this.name(kind, confirmation),
       id = this.config.notifications.wabaId;
     if (!name || !id || !this.config.meta.token || !this.config.meta.phoneId) return false;
     const cached = this.cache.get(name);
@@ -36,13 +37,14 @@ export class NotificationTransport {
     this.cache.set(name, { at: Date.now(), approved });
     return approved;
   }
-  async require(kind: NotificationKind) {
-    if (!(await this.approved(kind)))
+  async require(kind: NotificationKind, confirmation = false) {
+    if (!(await this.approved(kind, false, confirmation)))
       throw new PublicError(
-        'O envio desta notificação ainda aguarda a configuração ou aprovação do modelo pelo WhatsApp. A assinatura não foi ativada. Envie "notificações" para consultar o estado.',
+        'O envio desta notificação ainda aguarda a configuração ou aprovação do modelo pelo WhatsApp. Nenhuma configuração foi salva. Envie "notificações" para consultar o estado.',
       );
   }
-  async send(sender: string, kind: NotificationKind, values: string[]) {
+  async send(sender: string, kind: NotificationKind, values: string[], completionButton?: string) {
+    if(completionButton && (kind!=='day_reminders'||!/^hub:done:[A-Za-z0-9_-]{43}$/.test(completionButton))) throw new Error('Invalid reminder button');
     if (values.length !== (kind === 'daily_summary' ? 4 : 2)) throw new Error('Invalid template parameters');
     const result = await jsonRequest(
       this.fetcher,
@@ -55,13 +57,14 @@ export class NotificationTransport {
           to: sender,
           type: 'template',
           template: {
-            name: this.name(kind),
+            name: this.name(kind, Boolean(completionButton)),
             language: { code: this.config.notifications.language },
             components: [
               {
                 type: 'body',
                 parameters: values.map((text) => ({ type: 'text', text: text.replace(/\s+/g, ' ').trim() })),
               },
+              ...(completionButton?[{type:'button',sub_type:'quick_reply',index:'0',parameters:[{type:'payload',payload:completionButton}]}]:[]),
             ],
           },
         }),

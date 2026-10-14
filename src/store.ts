@@ -265,6 +265,7 @@ export class Store {
       await tx.query("DELETE FROM outbox WHERE created<$1 AND state='sent'", [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM notification_drafts WHERE expires<$1 AND state<>'executing'", [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM notification_deliveries WHERE created<$1 AND state NOT IN ('pending','sending')", [Date.now() - 30 * 86400_000]);
+      await tx.query("DELETE FROM reminder_occurrences WHERE updated<$1 AND state<>'pending' AND NOT sync_pending", [Date.now() - 30 * 86400_000]);
     });
   }
 }

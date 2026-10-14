@@ -65,8 +65,24 @@ async function fixture() {
     writes: [] as any[],
     failSend: false,
     pollError: null as Error | null,
+    completionError: null as Error | null,
+    completed: new Set<string>(),
   };
   const day = {
+    occurrenceState: async (_s:string,id:string,revision:number,due:number) => {
+      if(state.pollError) throw state.pollError;
+      if(!state.authorized) throw new ReminderConsentError('consent required');
+      const r=state.reminders.find(r=>r.id===id);
+      if(!r||r.revision!==revision||!r.enabled||r.deleted||state.occurrences.some(o=>o.id===id&&Date.parse(o.dueAt)>due)) return {state:'obsolete'};
+      return {state:state.completed.has(`${id}:${revision}:${due}`)?'completed':'pending',reminder:r,validUntil:r.validUntil??new Date(Date.now()+10*86400_000).toISOString()};
+    },
+    completeReminder: async (_s:string,id:string,revision:number,due:number) => {
+      if(state.completionError) throw state.completionError;
+      const result=await day.occurrenceState(_s,id,revision,due);
+      if(result.state==='obsolete') return result;
+      state.completed.add(`${id}:${revision}:${due}`);
+      return {state:'completed'};
+    },
     remindersAuthorized: async () => state.authorized,
     requireReminders: async () => {
       if (!state.authorized) throw new ReminderConsentError('consent required');
@@ -111,6 +127,148 @@ async function fixture() {
   };
   return { store, state, day, cash, n, subscribe, connect };
 }
+test('guided reminder options and quiet settings require owner buttons, valid minutes and final confirmation',async()=>{
+  const f=await fixture();
+  try {
+    let r=await f.n.prepareReminder(sender,{operation:'create',id:null,title:'Livro',schedule},new Set());
+    assert.match(r.text,/até marcar como concluído/);
+    const old=r.buttons![0].id;
+    assert.match((await f.n.command('bob','',old))!.text,/expirou/);
+    r=(await f.n.command(sender,'',old))!;
+    assert.match(r.text,/número inteiro/);
+    for(const text of ['0','-1','1.5','10081']) assert.match((await f.n.command(sender,text))!.text,/inteiro/);
+    r=(await f.n.command(sender,'7'))!;
+    assert.match(r.text,/respeitar seu período/);
+    assert.match((await f.n.command(sender,'',old))!.text,/expirou/);
+    r=(await f.n.command(sender,'',r.buttons![1].id))!;
+    assert.match(r.text,/a cada 7 minutos/);
+    assert.match(r.text,/ignorar para este lembrete/);
+    assert.equal(f.state.writes.length,0);
+    await f.n.confirm(sender,token(r),true);
+    assert.deepEqual(Object.fromEntries(Object.entries(f.state.writes[0][4]).filter(([k])=>['requires_confirmation','repeat_minutes','respect_quiet_hours'].includes(k))),{requires_confirmation:true,repeat_minutes:7,respect_quiet_hours:false});
+    await f.n.command(sender,'configurar silencio');
+    assert.match((await f.n.command(sender,'22:00 as 22:00'))!.text,/inválidos/);
+    r=(await f.n.command(sender,'22:00 as 07:00'))!;
+    assert.equal(await f.n.queue.settings(sender),null);
+    await f.n.confirm('bob',token(r),true);
+    assert.equal(await f.n.queue.settings(sender),null);
+    await f.n.confirm(sender,token(r),true);
+    assert.equal((await f.n.queue.settings(sender))!.enabled,true);
+    r=(await f.n.command(sender,'desativar silencio'))!;
+    assert.equal((await f.n.queue.settings(sender))!.enabled,true);
+    await f.n.confirm(sender,token(r),true);
+    assert.equal((await f.n.queue.settings(sender))!.enabled,false);
+    const raw=JSON.stringify((await f.store.db.query('SELECT data FROM notification_settings')).rows);
+    assert(!raw.includes('22:00'));
+  } finally {await f.store.close();}
+});
+test('confirmation repeats at the chosen interval, survives reinitialization and stops locally while Day is unavailable',async()=>{
+  const f=await fixture();
+  try {
+    const s=await f.subscribe(),now=Date.now()+1000,id=randomUUID();
+    f.state.reminders=[{id,revision:1,enabled:true,title:'Livro',requires_confirmation:true,repeat_minutes:5,respect_quiet_hours:true}];
+    await f.n.queue.remember(s,{id,revision:1,title:'Livro',timeZone:config.timeZone,dueAt:new Date(now).toISOString()},now);
+    await f.n.reminders.tick(now);
+    assert.equal(f.state.sent.length,1);
+    const payload=f.state.sent[0][3];
+    assert.match(payload,/^hub:done:/);
+    await f.connect(); // Same account reauthorization must preserve this pending occurrence.
+    await f.n.reminders.tick(now+299_999);
+    assert.equal(f.state.sent.length,1);
+    const restarted=new Notifications(config,f.store,f.day as any,f.cash as any,{} as any,f.n.transport);
+    await Promise.all([restarted.reminders.tick(now+300_000),f.n.reminders.tick(now+300_000)]);
+    assert.equal(f.state.sent.length,2);
+    assert.match((await restarted.command('bob','',payload))!.text,/não está disponível/);
+    assert.equal(f.state.completed.size,0);
+    f.state.completionError=new Error('offline');
+    assert.match((await restarted.command(sender,'',payload))!.text,/interrompidas/);
+    await restarted.reminders.tick(now+600_000);
+    assert.equal(f.state.sent.length,2);
+    assert.equal((await f.store.db.query('SELECT sync_pending FROM reminder_occurrences')).rows[0].sync_pending,true);
+    f.state.completionError=null;
+    await restarted.reminders.tick(now+660_000);
+    assert.equal(f.state.completed.size,1);
+    assert.match((await restarted.command(sender,'',payload))!.text,/já foi concluída/);
+    assert.equal(f.state.sent.length,2);
+  } finally {await f.store.close();}
+});
+test('quiet hours block initial sends and retries, exceptions bypass, and only latest occurrence survives',async()=>{
+  const f=await fixture();
+  try {
+    const s=await f.subscribe();
+    const date=new Date(Date.now()+86400_000).toISOString().slice(0,10);
+    const night=Date.parse(`${date}T23:00:00-03:00`),morning=night+8*3600_000;
+    await f.n.queue.saveSettings(sender,{enabled:true,start:'22:00',end:'07:00',timeZone:config.timeZone});
+    const ids=[randomUUID(),randomUUID()];
+    f.state.reminders=ids.map((id,i)=>({id,revision:1,title:i?'Exceção':'Livro',enabled:true,requires_confirmation:true,repeat_minutes:5,respect_quiet_hours:!i}));
+    for(const id of ids) await f.n.queue.remember(s,{id,revision:1,title:'Livro',timeZone:config.timeZone,dueAt:new Date(night).toISOString()},night);
+    await f.n.reminders.tick(night);
+    assert.equal(f.state.sent.length,1);
+    assert.equal(f.state.sent[0][2][0],'Exceção');
+    assert.equal((await f.n.queue.status(sender,night)).quiet,1);
+    const old=(await f.store.db.query("SELECT * FROM reminder_occurrences WHERE quiet_until>0")).rows[0];
+    const oldData:any=f.store.vault.open(old.data,`reminder-occurrence:${old.id}:${sender}`);
+    await f.n.queue.remember(s,{id:ids[0],revision:1,title:'Livro',timeZone:config.timeZone,dueAt:new Date(night+3600_000).toISOString()},night+3600_000);
+    await f.n.reminders.tick(night+3600_000);
+    await f.n.reminders.tick(morning);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,1);
+    // An earlier occurrence must never complete the replacement.
+    await f.n.command(sender,'',`hub:done:${oldData.token}`);
+    assert.equal(f.state.completed.size,0);
+    await f.n.reminders.tick(morning+5*60_000);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,2);
+    // Enter quiet hours after a reminder was already delivered.
+    await f.n.queue.saveSettings(sender,{enabled:true,start:'07:00',end:'09:00',timeZone:config.timeZone});
+    await f.n.reminders.tick(morning+10*60_000);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,2);
+    await f.n.reminders.tick(morning+2*3600_000);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,3);
+  } finally {await f.store.close();}
+});
+test('old delivered buttons, expiration, edits, revoked grants and opt-out never continue repeats or complete newer occurrences',async()=>{
+  const f=await fixture();
+  try {
+    const s=await f.subscribe(),now=Date.now()+1000,id=randomUUID();
+    const r={id,revision:1,title:'Livro',enabled:true,requires_confirmation:true,repeat_minutes:1};
+    f.state.reminders=[r];
+    const due=(at:number)=>({id,revision:1,title:r.title,timeZone:config.timeZone,dueAt:new Date(at).toISOString()});
+    await f.n.queue.remember(s,due(now),now);
+    await f.n.reminders.tick(now);
+    const old=f.state.sent[0][3];
+    await f.n.queue.remember(s,due(now+60_000),now+60_000);
+    await f.n.reminders.tick(now+60_000);
+    assert.match((await f.n.command(sender,'',old))!.text,/anterior/);
+    assert.equal(f.state.completed.size,0);
+    r.revision=2;
+    await f.n.reminders.tick(now+120_000);
+    assert.equal(f.state.sent.length,2);
+    r.revision=1;
+    await f.n.queue.remember(s,due(now+180_000),now+180_000);
+    f.state.authorized=false;
+    await f.n.reminders.tick(now+180_000);
+    assert.equal(f.state.sent.length,2);
+    assert.equal((await f.n.db.subscription(sender,'day_reminders'))!.problem,'day_consent');
+    f.state.authorized=true;
+    await f.n.db.pause(sender);
+    await f.n.reminders.tick(now+240_000);
+    assert.equal(f.state.sent.length,2);
+    assert.equal((await f.store.db.query("SELECT count(*)::int n FROM reminder_occurrences WHERE state='pending'")).rows[0].n,0);
+  } finally {await f.store.close();}
+});
+test('confirmation template sends a user-bound opaque quick reply and uses the approval for its own template',async()=>{
+  const calls:any[]=[];
+  const t=new NotificationTransport(config,async(url,init)=>{
+    calls.push({url,init});
+    return new Response(JSON.stringify(String(url).includes('message_templates')?{data:[{name:config.notifications.confirmationTemplate,status:'APPROVED',language:'pt_BR'}]}:{messages:[{id:'wamid.confirm'}]}));
+  });
+  assert.equal(await t.approved('day_reminders'),false);
+  assert.equal(await t.approved('day_reminders',false,true),true);
+  const payload='hub:done:'+randomBytes(32).toString('base64url');
+  await t.send(sender,'day_reminders',['Livro','06:30'],payload);
+  const body=JSON.parse(calls.at(-1).init.body);
+  assert.equal(body.template.name,config.notifications.confirmationTemplate);
+  assert.deepEqual(body.template.components[1],{type:'button',sub_type:'quick_reply',index:'0',parameters:[{type:'payload',payload}]});
+});
 test('screenshot question returns real catalog without AI, even with old Calendar-only history', async () => {
   const f = await fixture();
   try {
@@ -197,7 +355,7 @@ test('repeated polling sends occurrence once; receipt state never claims deliver
     await f.n.db.receipt('wamid.1', 'read');
     await f.n.db.receipt('wamid.1', 'delivered');
     assert.equal((await f.n.db.history(sender))[0].state, 'read');
-    await f.n.db.enqueue(sub, `${sub.data.accounts.day}:${id}:${now - 100}`, now - 100, 300000, {});
+    await f.n.queue.remember(sub,f.state.occurrences[0],now);
     assert.equal((await f.n.db.history(sender)).length, 1);
     const raw = JSON.stringify((await f.store.db.query('SELECT data FROM notification_deliveries')).rows);
     assert(!raw.includes('Beber água'));
@@ -257,7 +415,9 @@ test('reminder writes preserve button boundary, foreign IDs, revisions and conne
   const f = await fixture();
   try {
     const change = { operation: 'create', id: null, title: 'Levar livro', schedule };
-    const preview = await f.n.prepareReminder(sender, change, new Set());
+    const questions = await f.n.prepareReminder(sender, change, new Set());
+    const quiet = await f.n.command(sender,'',questions.buttons![1].id);
+    const preview = (await f.n.command(sender,'',quiet!.buttons![0].id))!;
     assert.equal(f.state.writes.length, 0);
     await f.n.confirm('bob', token(preview), true);
     assert.equal(f.state.writes.length, 0);
