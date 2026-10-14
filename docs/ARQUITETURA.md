@@ -26,7 +26,7 @@ Cada conta é autorizada separadamente. O Hub não ganha acesso ao Cash por rece
 
 ## Conversa e IA
 
-Comandos de conexão e catálogo de notificações têm tratamento próprio. O áudio é transcrito uma vez no Hub com contexto neutro; o texto resultante entra no mesmo fluxo das mensagens digitadas. A seleção de ferramentas entre domínios ocorre no Hub. O caminho somente Cash e o prefixo cash: preservam o assistente financeiro do Cash, que ainda usa sua própria IA. Portanto, a inteligência financeira ainda não foi inteiramente extraída para o Hub.
+Comandos de conexão, workspaces e catálogo de notificações têm tratamento próprio. O áudio é transcrito uma vez no Hub com contexto neutro; o texto resultante entra no mesmo fluxo das mensagens digitadas. A seleção de ferramentas entre domínios e de contexto financeiro ocorre no Hub. Consultas usam as ferramentas de leitura; escritas são encaminhadas ao assistente financeiro do Cash, que ainda usa sua própria IA. Portanto, a inteligência financeira ainda não foi inteiramente extraída para o Hub. Veja [Workspaces](WORKSPACES.md) para a separação do histórico, seleção por solicitação e confirmação no destino original.
 
 Consultas de gastos realizados recebem totais calculados no Cash; a IA não precisa somar lançamentos paginados. Período, categorias e origem fixa são filtros explícitos. Escritas financeiras seguem o rascunho e o botão atual do Cash. Calendar e gestão de lembretes têm prévias próprias; texto/voz não substituem os botões de confirmação de operações.
 

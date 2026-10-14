@@ -11,6 +11,7 @@ export type Preferences = {
   sources: ('cash' | 'day' | 'calendar')[];
   consentAt: number;
   accounts: Record<string, string>;
+  cashWorkspace?: { id: number; name: string; reference: string };
   since: number;
 };
 export type Subscription = {

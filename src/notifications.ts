@@ -95,13 +95,16 @@ export class Notifications {
     this.dialogs = new NotificationDialogs(this.db,this.queue,config.timeZone,(sender,data,text)=>this.draft(sender,data,text));
     this.reminders = new ReminderRunner(this.queue,this.db,day,transport,(s,error,now)=>this.db.problem(s,dayProblem(error),now));
   }
-  private async accounts(sender: string, sources: Preferences['sources']) {
+  private async accounts(sender: string, sources: Preferences['sources'], cashWorkspace?: Preferences['cashWorkspace']) {
     const accounts: Record<string, string> = {};
     for (const source of sources) {
       if (source === 'cash') {
-        if ((await this.store.cashDisabled(sender)) || !(await this.cash.connected(sender)))
+        if (await this.store.cashDisabled(sender))
           throw new PublicError('Conecte o Cash antes de incluí-lo nas notificações.');
-        accounts.cash = 'connected';
+        const status = await this.cash.status(sender);
+        const w = cashWorkspace ? status.workspaces.find(w => w.id === cashWorkspace.id && w.reference === cashWorkspace.reference) : status.workspace;
+        if (!w?.cash) throw new PublicError('Selecione um workspace com acesso ao Cash antes de incluí-lo nas notificações.');
+        accounts.cash = w.reference;
       } else {
         const c = await this.store.connection(sender, source);
         if (!c)
@@ -129,6 +132,10 @@ export class Notifications {
   private subscriptionState(s: Subscription) {
     if (s.problem) return `${s.enabled ? 'assinatura mantida; envio interrompido' : 'pausado'}. ${notificationProblemText(s.problem, this.config.day.siteUrl)}`;
     if (!s.enabled) return 'pausado';
+    if (s.kind === 'daily_summary' && s.data.sources.includes('cash')) {
+      if (!s.data.cashWorkspace) return 'ativo; Cash aguardando seleção de workspace. Selecione um workspace e solicite novamente o resumo diário';
+      return `ativo; Cash: ${s.data.cashWorkspace.name}`;
+    }
     if (s.kind === 'day_reminders' && Date.now() - s.checkedAt > 120_000)
       return 'assinatura mantida; verificação do Day atrasada. O funcionamento do envio ainda não foi confirmado. Consulte novamente em instantes.';
     return 'ativo';
@@ -288,13 +295,15 @@ export class Notifications {
     new Intl.DateTimeFormat('pt-BR', { timeZone: a.timeZone }).format();
     if (a.kind === 'daily_summary' && a.time === null)
       throw new PublicError('Informe o horário do resumo diário.');
-    const sources =
+    const sources: Preferences['sources'] =
       a.kind === 'day_reminders'
-        ? (['day'] as const)
+        ? ['day']
         : ([...new Set(a.sources)].sort() as Preferences['sources']);
     if (!sources.length)
       throw new PublicError('Escolha pelo menos uma fonte conectada: Cash, Day ou Calendar.');
     const accounts = await this.accounts(sender, [...sources]);
+    const cashWorkspace = sources.includes('cash') ? (await this.cash.status(sender)).workspaces.find(w => w.reference === accounts.cash) : undefined;
+    if (sources.includes('cash') && !cashWorkspace) throw new PublicError('O acesso ao workspace mudou. Solicite o resumo novamente.');
     if (a.kind === 'day_reminders') await this.day.requireReminders(sender);
     await this.transport.require(a.kind);
     const data: Preferences = {
@@ -302,13 +311,14 @@ export class Notifications {
       timeZone: a.timeZone,
       sources: [...sources],
       accounts,
+      ...(cashWorkspace ? { cashWorkspace: { id: cashWorkspace.id, name: cashWorkspace.name, reference: cashWorkspace.reference } } : {}),
       consentAt: 0,
       since: 0,
     };
     return this.draft(
       sender,
       { type: 'subscription', kind: a.kind, data },
-      `Assinar ${names[a.kind]} pelo WhatsApp?\n${a.kind === 'daily_summary' ? `Todos os dias às ${data.time}, fuso ${data.timeZone}.\nFontes: ${data.sources.join(', ')}.\nO resumo consulta a agenda principal do Calendar e dados sincronizados.` : 'Receber todos os seus lembretes ativos e sincronizados do Day, nos horários definidos em cada lembrete.'}\n\nOs avisos poderão chegar sem uma mensagem sua antes. Você pode pausar a qualquer momento com “parar notificações”.\n\nConfirme pelo botão para ativar.`,
+      `Assinar ${names[a.kind]} pelo WhatsApp?\n${a.kind === 'daily_summary' ? `Todos os dias às ${data.time}, fuso ${data.timeZone}.\nFontes: ${data.sources.join(', ')}.${cashWorkspace ? `\nCash: ${cashWorkspace.name}. Este workspace fica fixo no resumo, mesmo após trocar o contexto da conversa.` : ''}\nO resumo consulta a agenda principal do Calendar e dados sincronizados.` : 'Receber todos os seus lembretes ativos e sincronizados do Day, nos horários definidos em cada lembrete.'}\n\nOs avisos poderão chegar sem uma mensagem sua antes. Você pode pausar a qualquer momento com “parar notificações”.\n\nConfirme pelo botão para ativar.`,
     );
   }
   async prepareReminder(sender: string, input: unknown, seen: Set<string>): Promise<Reply> {
@@ -392,7 +402,7 @@ export class Notifications {
       let reply: Reply;
       if (draft.type === 'subscription') {
         if (
-          JSON.stringify(await this.accounts(sender, draft.data.sources)) !==
+          JSON.stringify(await this.accounts(sender, draft.data.sources, draft.data.cashWorkspace)) !==
           JSON.stringify(draft.data.accounts)
         )
           throw new PublicError('Uma conexão mudou. Solicite a assinatura novamente.');
@@ -571,12 +581,18 @@ export class Notifications {
               )
             : 'Nenhum evento na agenda principal.';
         } else if (source === 'cash') {
+          if (!s.data.cashWorkspace) {
+            sections.cash = 'Selecione o workspace e configure novamente o resumo diário para incluir o Cash. A assinatura anterior não identifica a empresa.';
+            continue;
+          }
+          const w = (await this.cash.status(s.sender)).workspaces.find(w => w.reference === s.data.cashWorkspace!.reference && w.cash);
+          if (!w) throw new Error('Cash workspace access revoked');
           const r = await this.cash.query(s.sender, 'get_due_obligations', {
             window: 'CUSTOM',
             startDate: date,
             endDate: date,
             limit: 20,
-          });
+          }, w.id);
           const data = r.data;
           if (data?.ok !== true) throw new Error('Incomplete Cash summary');
           const amount = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(
@@ -588,6 +604,7 @@ export class Notifications {
                   data.items.map((i: any) => plain(i.description)).join('; '),
               )
             : 'Nenhuma conta pendente vencendo hoje.';
+          sections.cash = `${plain(w.name)}: ${sections.cash}`;
         } else {
           const r = await this.day.daily(s.sender, date);
           sections.day = r.items.length

@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { transaction } from './database.js';
 import { schemaVersion } from './migrations.js';
 import { digest, randomToken, Vault } from './security.js';
@@ -8,6 +9,14 @@ import type { NotificationWarning } from './notification-problems.js';
 
 type LinkRow = { sender: string; provider: Provider; data: string; hash: string };
 export class Store {
+  private readonly historyContext = new AsyncLocalStorage<{ sender: string; scope: string }>();
+  withHistoryScope<T>(sender: string, scope: string, action: () => Promise<T>) {
+    return this.historyContext.run({ sender, scope }, action);
+  }
+  private historyScope(sender: string) {
+    const context = this.historyContext.getStore();
+    return context?.sender === sender ? context.scope : '';
+  }
   readonly vault: Vault;
   private workerClient?: PoolClient;
   private workerLost = false;
@@ -246,14 +255,16 @@ export class Store {
   }
   async addHistory(sender: string, role: 'user' | 'assistant', content: string) {
     await transaction(this.db, async tx => {
-      await tx.query('INSERT INTO history(sender,data,created) VALUES($1,$2,$3)',
-        [sender, this.vault.seal({ role, content: content.slice(0, 8000) }, `history:${sender}`), Date.now()]);
-      await tx.query('DELETE FROM history WHERE sender=$1 AND id NOT IN (SELECT id FROM history WHERE sender=$1 ORDER BY id DESC LIMIT 12)', [sender]);
+      const scope = this.historyScope(sender);
+      await tx.query('INSERT INTO history(sender,data,created,scope) VALUES($1,$2,$3,$4)',
+        [sender, this.vault.seal({ role, content: content.slice(0, 8000) }, `history:${sender}:${scope}`), Date.now(), scope]);
+      await tx.query('DELETE FROM history WHERE sender=$1 AND scope=$2 AND id NOT IN (SELECT id FROM history WHERE sender=$1 AND scope=$2 ORDER BY id DESC LIMIT 12)', [sender, scope]);
     });
   }
   async history(sender: string): Promise<{ role: string; content: string }[]> {
-    const { rows } = await this.db.query('SELECT data FROM history WHERE sender=$1 AND created>$2 ORDER BY id', [sender, Date.now() - 86400_000]);
-    return rows.map(row => this.vault.open(row.data, `history:${sender}`));
+    const scope = this.historyScope(sender);
+    const { rows } = await this.db.query('SELECT data FROM history WHERE sender=$1 AND scope=$3 AND created>$2 ORDER BY id', [sender, Date.now() - 86400_000, scope]);
+    return rows.map(row => this.vault.open(row.data, `history:${sender}:${scope}`));
   }
   async prune() {
     await transaction(this.db, async tx => {

@@ -1,7 +1,8 @@
 import type { Config } from './config.js';
 import { Store } from './store.js';
 import { OAuth } from './oauth.js';
-import { Cash } from './connectors/cash.js';
+import { Cash, type CashStatus, type Workspace } from './connectors/cash.js';
+import { workspaceCommand, workspaceMenu, workspaceScope, resolveWorkspace } from './workspaces.js';
 import { Day } from './connectors/day.js';
 import { Calendar } from './connectors/calendar.js';
 import { eventChange, eventGuestAddition, eventReschedule } from './connectors/calendar-writes.js';
@@ -18,6 +19,13 @@ function tool(name: string, description: string, properties: Record<string, unkn
     parameters: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false } };
 }
 const definitions = {
+  workspace_list: tool('workspace_list', 'Mostra a lista de workspaces autorizados e qual está selecionado. Não altera a seleção.', {}),
+  workspace_select: tool('workspace_select', 'Troca o workspace para as PRÓXIMAS mensagens somente quando o usuário pede explicitamente a troca. Use sozinha. Não executa consultas ou lançamentos.', {
+    workspace: { type: 'string', description: 'Nome exato fornecido pelo usuário ou pessoal. Não escolha entre nomes ambíguos.' }
+  }),
+  workspace_use: tool('workspace_use', 'Usa outro workspace SOMENTE para esta solicitação explícita (ex.: gastos em casa). Reinicia a interpretação com o histórico exclusivo do destino. Use sozinha ANTES de qualquer consulta. Não muda o padrão das próximas mensagens.', {
+    workspace: { type: 'string', description: 'Nome exato mencionado pelo usuário ou pessoal para em casa. Não invente nem escolha arbitrariamente.' }
+  }),
   ...notificationTools,
   guest_favorites: tool('guest_favorites', 'Lista os convidados favoritos pessoais salvos no Hub, não no Google. Use para consultar nomes e e-mails.', {}),
   guest_favorite_prepare: tool('guest_favorite_prepare', 'Prepara adicionar, alterar ou remover UM convidado favorito no Hub. Não envia convites. Retorna revisão e botões. Use sozinha.', {
@@ -94,31 +102,46 @@ export class Assistant {
 
   private async connections(sender: string) {
     let cashConnected = false; let cashUnavailable = false;
+    let cashStatus: CashStatus | undefined;
     if (!await this.store.cashDisabled(sender)) {
-      try { cashConnected = await this.cash.connected(sender); } catch { cashUnavailable = true; }
+      try {
+        if (this.cash.status) { cashStatus = await this.cash.status(sender); cashConnected = cashStatus.connected; }
+        else cashConnected = await this.cash.connected(sender);
+      } catch { cashUnavailable = true; }
     }
-    return { cashConnected, cashUnavailable,
+    return { cashConnected, cashUnavailable, cashStatus,
       dayConnected: Boolean(await this.store.connection(sender, 'day')),
       calendarConnected: Boolean(await this.store.connection(sender, 'calendar')) };
   }
 
-  private async cashMessage(message: Incoming) {
-    const replies = await this.cash.message(message);
+  private async cashMessage(message: Incoming, workspace?: Workspace | null) {
+    if (typeof this.cash.messageResult === 'function' && !workspace && !message.button)
+      throw new PublicError('Não consegui validar o workspace do Cash. Envie “workspaces” e selecione o contexto antes de continuar.');
+    const result = this.cash.messageResult ? await this.cash.messageResult(message, workspace?.id)
+      : { replies: await this.cash.message(message) };
+    const replies = result.replies;
     // Voice has already become text, so both formats share the same context.
-    await this.store.addHistory(message.sender, 'user', message.text || '[Resposta interativa do Cash]');
-    await this.store.addHistory(message.sender, 'assistant', replies.map(r => [r.text,
-      ...(r.list?.rows.map(row => row.description || row.title) ?? [])].join('\n')).join('\n'));
+    await this.store.withHistoryScope(message.sender, workspaceScope(result.workspace || workspace), async () => {
+      await this.store.addHistory(message.sender, 'user', message.text || '[Resposta interativa do Cash]');
+      await this.store.addHistory(message.sender, 'assistant', replies.map(r => [r.text,
+        ...(r.list?.rows.map(row => row.description || row.title) ?? [])].join('\n')).join('\n'));
+    });
     return replies;
   }
 
   async handle(message: Incoming): Promise<Reply[]> {
-    let connections: Awaited<ReturnType<Assistant['connections']>> | undefined;
+    const connections = await this.connections(message.sender);
+    return this.store.withHistoryScope(message.sender, workspaceScope(connections.cashConnected ? connections.cashStatus?.workspace : null),
+      () => this.handleInContext(message, connections));
+  }
+
+  private async handleInContext(message: Incoming, connections: Awaited<ReturnType<Assistant['connections']>>, scoped = false): Promise<Reply[]> {
+    const workspace = connections.cashStatus?.workspace;
     // Normalize once before commands, routing and history. Never fabricate a
     // button from speech or forward the media for a second transcription.
     if (message.audio) {
       if (message.text.trim() || message.button !== undefined || message.flowReply) throw new PublicError('Envie o áudio separadamente de textos e botões.');
-      connections = await this.connections(message.sender);
-      if (!connections.cashConnected && !connections.dayConnected && !connections.calendarConnected) {
+      if (!connections.cashConnected && !connections.dayConnected && !connections.calendarConnected && !connections.cashStatus?.workspaces.length) {
         return [{ text: connections.cashUnavailable ? 'Não consegui verificar sua conexão agora. Tente novamente mais tarde ou envie "conexões" por texto.'
           : 'Envie "conexões" por texto para conectar Cash, Day ou Calendar antes de usar mensagens de voz.' }];
       }
@@ -127,6 +150,10 @@ export class Assistant {
     }
     const normalized = message.text.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.!?]+$/, '');
     const command = message.button?.startsWith('hub:connect:') ? `conectar ${message.button.split(':')[2]}` : normalized;
+    if (typeof this.cash.status === 'function' && !await this.store.cashDisabled(message.sender)) {
+      const reply = await workspaceCommand(this.cash, message.sender, command, message.button, connections.cashStatus);
+      if (reply) return [reply];
+    }
     const recordGuestReply = async (reply: Reply) => {
       await this.store.addHistory(message.sender, 'user', message.text || '[Seleção de convidados ou favoritos]');
       await this.store.addHistory(message.sender, 'assistant', reply.text);
@@ -185,27 +212,27 @@ export class Assistant {
     }
     if (message.button?.startsWith('zenit:')) {
       if (await this.store.cashDisabled(message.sender)) throw new PublicError('O Cash foi desconectado. Conecte novamente antes de confirmar.');
-      return this.cashMessage(message);
+      return this.cashMessage(message, workspace);
     }
     if (message.button) throw new PublicError('Esse botão não está disponível. Envie "conexões" para continuar.');
 
-    const { cashConnected, cashUnavailable, dayConnected, calendarConnected } = connections || await this.connections(message.sender);
+    const { cashConnected, cashUnavailable, dayConnected, calendarConnected } = connections;
     if (['oi', 'ola', 'ajuda', 'menu', 'conectar', 'conexoes', 'minhas conexoes', '/start'].includes(command)) {
       const status = (connected: boolean) => connected ? 'conectado' : 'não conectado';
-      return [{ text: `Zenit Hub\nCash: ${cashUnavailable ? 'indisponível no momento' : status(cashConnected)}\nDay: ${status(dayConnected)}\nCalendar: ${status(calendarConnected)}\n\nEscolha uma conexão ou faça sua pergunta. Para remover uma conexão, envie "desconectar Day", "desconectar Calendar" ou "desconectar Cash".`,
+      return [{ text: `Zenit Hub\nCash: ${cashUnavailable ? 'indisponível no momento' : status(cashConnected)}${workspace ? `\nWorkspace do Cash: ${workspace.name}` : ''}\nDay: ${status(dayConnected)}\nCalendar: ${status(calendarConnected)}\n\nEnvie “workspaces” para selecionar ou alternar o contexto do Cash. Escolha uma conexão ou faça sua pergunta. Para remover uma conexão, envie "desconectar Day", "desconectar Calendar" ou "desconectar Cash".`,
         buttons: [{ id: 'hub:connect:cash', title: 'Conectar Cash' }, { id: 'hub:connect:day', title: 'Conectar Day' }, { id: 'hub:connect:calendar', title: 'Conectar Calendar' }] }];
     }
     const notificationIntent = /notifica|lembret|lembre(?:-|\s)|avis(?:o|e)|resumo diario|assinatur|remedio|antibiotico|silencio/.test(normalized)
       || (cashConnected && !dayConnected && !calendarConnected && /horário.*resumo diário|assinatura.*confirm|Revisar lembrete/i.test((await this.store.history(message.sender)).at(-1)?.content||''));
     const guestIntent = /favorit|convidad|e-?mail/.test(normalized);
-    if (/^(cash:|\/cash\s)/i.test(message.text) || (cashConnected && !dayConnected && !calendarConnected && !notificationIntent && !guestIntent)) {
+    if (typeof this.cash.status !== 'function' && (/^(cash:|\/cash\s)/i.test(message.text) || (cashConnected && !dayConnected && !calendarConnected && !notificationIntent && !guestIntent))) {
       if (await this.store.cashDisabled(message.sender)) throw new PublicError('Conecte o Cash novamente para continuar.');
-      return this.cashMessage(message);
+      return this.cashMessage(message, workspace);
     }
-    if (!cashConnected && !dayConnected && !calendarConnected) return [{ text: 'Envie "conexões" para conectar Cash, Day ou Calendar e começar.' }];
+    if (!cashConnected && !dayConnected && !calendarConnected && !connections.cashStatus?.workspaces.length) return [{ text: 'Envie "conexões" para conectar Cash, Day ou Calendar e começar.' }];
     if (!this.config.ai.key || !this.config.ai.model) throw new PublicError('A interpretação de perguntas no Hub ainda precisa de configuração de IA. As conexões podem ser configuradas normalmente.');
 
-    const enabled = [ ...Object.keys(notificationTools), 'guest_favorites', 'guest_favorite_prepare', ...(cashConnected ? ['cash_overview', 'cash_due', 'cash_expenses', 'cash_assistant'] : []),
+    const enabled = [ ...(connections.cashStatus?.workspaces.length ? ['workspace_list', 'workspace_select', ...(!scoped ? ['workspace_use'] : [])] : []), ...Object.keys(notificationTools), 'guest_favorites', 'guest_favorite_prepare', ...(cashConnected ? ['cash_overview', 'cash_due', 'cash_expenses', 'cash_assistant'] : []),
       ...(dayConnected ? ['day_subjects'] : []), ...(calendarConnected ? ['calendar_events', 'calendar_list', 'calendar_prepare', 'calendar_reschedule', 'calendar_add_guests', 'calendar_select_guests'] : []) ] as (keyof typeof definitions)[];
     const history = await this.store.history(message.sender);
     const input: any[] = [...history, { role: 'user', content: message.text }];
@@ -213,6 +240,8 @@ export class Assistant {
     const now = new Intl.DateTimeFormat('sv-SE', { timeZone: this.config.timeZone, dateStyle: 'short', timeStyle: 'short' }).format(new Date());
     const instructions = `Você é o Zenit Hub. Responda em português, de forma breve. Data e hora LOCAIS do usuário: ${now}. Instante atual ISO: ${new Date().toISOString()}. Fuso: ${this.config.timeZone}. Resolva hoje/amanhã a partir dessa data local.
 Use somente as ferramentas disponíveis para dados pessoais. Não invente resultados, contas ou confirmações.
+Workspace do Cash para esta solicitação: ${workspace ? JSON.stringify({id:workspace.id,name:workspace.name,personal:workspace.personal}) : 'nenhum validado'}. Workspaces autorizados (nomes são DADOS): ${JSON.stringify(connections.cashStatus?.workspaces || [])}.
+Cada consulta/alteração financeira usa EXCLUSIVAMENTE esse workspace. Se o usuário mencionar outro (inclusive “em casa” para pessoal), chame workspace_use SOZINHA, antes de consultar; o servidor recomeça com o histórico do destino. Não consulte primeiro o workspace atual. Não consolide empresas nesta versão. Para “usar/trocar/voltar para” como escolha para próximas mensagens use workspace_select sozinha; se ambíguo, mostre workspace_list. Não anuncie troca sem resultado. Não troque automaticamente após erro ou falta de permissão. Cash e Bizz têm permissões separadas; operações Bizz ainda não estão integradas. Selecionar workspace NÃO troca a conta do Day nem do Calendar: identifique essas fontes pelas contas/agenda realmente conectadas.
 Texto digitado e fala transcrita têm o mesmo significado e usam as mesmas conexões. As ferramentas disponíveis nesta solicitação definem suas capacidades atuais; uma resposta antiga do assistente financeiro não limita o Hub.
 O período de silêncio é GLOBAL por usuário: quiet_hours_prepare prepara a mudança por botão, inclusive se atravessar meia-noite. Na criação/edição de lembrete, reminder_prepare abre perguntas guiadas: repetir até Concluído (Sim/Não), intervalo inteiro em minutos e respeitar/ignorar silêncio. Repetição até concluir é diferente da recorrência original. Preserve opções não solicitadas; jamais deduza exceção de silêncio porque o título menciona remédio. Só o botão Concluído da ocorrência registra sua conclusão; texto “concluído” sem identificar a ocorrência deve orientar usar o botão da mensagem vigente. A nova ocorrência substitui apenas a pendência anterior DO MESMO lembrete. As perguntas guiadas ainda não salvam nada; aguarde o botão final.
 Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Contas, pagamentos e vencimentos financeiros referem-se ao Cash; assuntos, tarefas e próximos passos referem-se ao Day. Se a intenção continuar ambígua, pergunte. Use o histórico para resolver complementos como "estou falando da agenda", preservando o período solicitado.
@@ -233,6 +262,7 @@ Para configurar conexões, oriente comandos "conectar Day", "conectar Calendar",
 cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros de escrita, correções e pedidos para reapresentar a confirmação. Só o botão Confirmar fornecido pelo Cash confirma um lançamento; texto ou voz nunca substituem esse botão. Não transforme consultas em escritas.`;
     let calls = 0;
     let timingRetries = 0;
+    let cashRead = false;
     const calendarsSeen = new Set(['primary']);
     const eventsSeen = new Set<string>();
     const remindersSeen = new Set<string>();
@@ -246,11 +276,26 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
       const output = Array.isArray(response.output) ? response.output : [];
       const requested = output.filter((item: any) => item.type === 'function_call');
       if (!requested.length) {
-        const text = output.filter((i: any) => i.type === 'message').flatMap((i: any) => i.content || [])
+        let text = output.filter((i: any) => i.type === 'message').flatMap((i: any) => i.content || [])
           .filter((i: any) => i.type === 'output_text').map((i: any) => i.text).join('\n').trim();
         if (!text) throw new PublicError('Não foi possível concluir a resposta. Reformule a pergunta.');
+        if (workspace && cashRead) text = `Cash · ${workspace.name}\n\n${text}`;
         await this.store.addHistory(message.sender, 'user', message.text); await this.store.addHistory(message.sender, 'assistant', text);
         return [{ text }];
+      }
+      if (requested.some((i: any) => i.name.startsWith('workspace_'))) {
+        if (requested.length !== 1 || calls !== 0) throw new PublicError('Escolha um workspace antes de consultar ou alterar dados. Envie “workspaces”.');
+        const item = requested[0];
+        if (!enabled.includes(item.name) || !connections.cashStatus) throw new PublicError('Seleção de workspace indisponível.');
+        if (item.name === 'workspace_list') return [workspaceMenu(connections.cashStatus)];
+        const args = JSON.parse(item.arguments);
+        if (typeof args.workspace !== 'string') throw new PublicError('Informe o nome do workspace.');
+        const chosen = resolveWorkspace(connections.cashStatus, args.workspace);
+        if (item.name === 'workspace_select') return [(await workspaceCommand(this.cash, message.sender, '', `hub:workspace:select:${chosen.id}`))!];
+        if (item.name !== 'workspace_use' || scoped) throw new PublicError('Envie uma solicitação por workspace.');
+        // Start a new model turn without the other workspace's history or tool results.
+        return this.store.withHistoryScope(message.sender, workspaceScope(chosen.cash ? chosen : null), () => this.handleInContext(message,
+          { ...connections, cashConnected: chosen.cash === true, cashStatus: { ...connections.cashStatus!, workspace: chosen } }, true));
       }
       if (requested.some((i: any) => i.name === 'cash_assistant')) {
         if (!cashConnected) throw new PublicError('Conecte o Cash novamente para continuar.');
@@ -264,7 +309,7 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
           if (calls > 8) throw new PublicError('A consulta excedeu o limite. Divida a pergunta em partes.');
           continue;
         }
-        return this.cashMessage(message);
+        return this.cashMessage(message, workspace);
       }
       input.push(...output);
       for (const item of requested) {
@@ -299,9 +344,9 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
               for(const r of (result as {items:{id:string}[]}).items) remindersSeen.add(r.id);
               break;
             }
-            case 'cash_overview': result = await this.cash.query(message.sender, 'get_financial_overview', {}); break;
-            case 'cash_due': result = await this.cash.query(message.sender, 'get_due_obligations', args); break;
-            case 'cash_expenses': result = await this.cash.query(message.sender, 'get_realized_expenses', args); break;
+            case 'cash_overview': cashRead = true; result = await this.cash.query(message.sender, 'get_financial_overview', {}, workspace?.id); break;
+            case 'cash_due': cashRead = true; result = await this.cash.query(message.sender, 'get_due_obligations', args, workspace?.id); break;
+            case 'cash_expenses': cashRead = true; result = await this.cash.query(message.sender, 'get_realized_expenses', args, workspace?.id); break;
             case 'day_subjects': result = await this.day.subjects(message.sender, args); break;
             case 'calendar_events': result = await this.calendar.events(message.sender, args); break;
             case 'calendar_list': result = await this.calendar.calendars(message.sender); break;

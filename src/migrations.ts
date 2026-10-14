@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 6;
+export const schemaVersion = 7;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -118,6 +118,13 @@ export async function migrate(pool: Pool) {
         CREATE INDEX reminder_occurrences_next ON reminder_occurrences(next_send) WHERE state='pending' OR sync_pending;
         CREATE INDEX reminder_occurrences_owner ON reminder_occurrences(sender,reminder_key,due DESC);
         INSERT INTO hub_schema_migrations(version) VALUES(6);`);
+    }
+    if (!rows.some(row => row.version === 7)) {
+      // Legacy turns have no reliable workspace. Do not guess their ownership.
+      await client.query(`ALTER TABLE history ADD COLUMN scope TEXT NOT NULL DEFAULT '';
+        UPDATE history SET scope='legacy';
+        CREATE INDEX history_sender_scope_id ON history(sender,scope,id DESC);
+        INSERT INTO hub_schema_migrations(version) VALUES(7);`);
     }
   });
 }

@@ -25,17 +25,19 @@ test('signed voice is transcribed once, routed by Hub and reaches Cash as text w
   const store = (await createTestStore(config.key));
   const cashCalls: any[] = []; const metaCalls: any[] = [];
   const buttons = [{ id: 'zenit:confirm:42:1790700000000', title: 'Confirmar' }, { id: 'zenit:cancel:42:1790700000000', title: 'Cancelar' }];
+  const workspace = { id: 3, name: 'Casa', personal: true, reference: '7:3', cash: true };
   const cash = new Cash(config.cash, (async (_url, init) => {
     const raw = String(init?.body); const headers = new Headers(init?.headers);
     assert.equal(headers.get('x-hub-signature'), bridgeSignature(raw, headers.get('x-hub-timestamp')!, headers.get('x-hub-nonce')!, '/api/integrations/hub/bridge', config.cash.secret));
     const body = JSON.parse(raw);
-    if (body.operation === 'status') return new Response(JSON.stringify({ connected: true }));
+    if (body.operation === 'status' || body.operation === 'workspaces') return new Response(JSON.stringify({ connected: true, workspace, workspaces: [workspace] }));
     cashCalls.push(body);
     assert.equal(body.sender, sender);
     assert.equal(body.text, body.buttonId ? '' : 'Gastei cinquenta reais com almoço.');
     assert.equal(body.audio, undefined);
+    assert.equal(body.workspaceId, 3);
     assert(!('userId' in body) && !('companyId' in body));
-    return new Response(JSON.stringify({ replies: [{ text: 'Confira o rascunho.', buttons }] }));
+    return new Response(JSON.stringify({ workspace, replies: [{ text: 'Cash · Casa\nConfira o rascunho.', buttons }] }));
   }) as typeof fetch);
   const whatsapp = new WhatsApp(config, (async (_url, init) => {
     metaCalls.push(JSON.parse(String(init?.body))); return new Response(JSON.stringify({ success: true }));
@@ -69,9 +71,10 @@ test('signed voice is transcribed once, routed by Hub and reaches Cash as text w
     assert.equal(replies.length, 1);
     assert.deepEqual(replies[0].interactive.action.buttons.map((b: any) => b.reply), buttons);
     assert.equal((await store.db.query('SELECT state FROM inbox')).rows[0]?.state, 'done');
-    assert.equal((await store.history(sender)).length, 2);
-    assert.equal((await store.history(sender))[0].content, 'Gastei cinquenta reais com almoço.');
-    assert(!JSON.stringify((await store.history(sender))).includes('123456789'));
+    const history = await store.withHistoryScope(sender, 'cash:7:3', () => store.history(sender));
+    assert.equal(history.length, 2);
+    assert.equal(history[0].content, 'Gastei cinquenta reais com almoço.');
+    assert(!JSON.stringify(history).includes('123456789'));
     assert(!JSON.stringify((await store.db.query('SELECT data FROM history')).rows).includes('cinquenta'));
     const result = await assistant.handle({ id: 'wamid.click', sender, text: '', button: buttons[0].id, timestamp: Date.now() / 1000 });
     assert.equal(cashCalls[1].buttonId, buttons[0].id);

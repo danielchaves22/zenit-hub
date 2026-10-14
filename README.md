@@ -5,6 +5,7 @@ Backend de conexões para conversar com Cash, Day e Google Calendar pelo WhatsAp
 ## Capacidades
 
 - Consultas financeiras, inclusive gastos realizados com filtros, totais e média mensal; escritas continuam no fluxo confirmado do Cash.
+- Seleção e alternância de workspace pelo WhatsApp, com contexto identificado nas respostas e confirmações. Envie `workspaces`; veja [comandos e limites](docs/WORKSPACES.md).
 - Consulta de assuntos do Day e gestão de lembretes com autorização adicional.
 - Consulta, criação, alteração e exclusão de eventos comuns no Calendar, com prévia e confirmação.
 - Convidados favoritos pessoais no Hub, geridos pelo WhatsApp; seleção ao criar eventos e inclusão em eventos existentes da agenda organizadora, preservando participantes e respostas. Convites somente após confirmação. Seleção múltipla via Flow quando publicado/configurado, ou números/nomes pelo chat; a inclusão em eventos existentes também aceita e-mails informados diretamente.
@@ -45,6 +46,7 @@ Os testes usam PostgreSQL local em base terminada em \_test, com schemas descart
 
 - [Arquitetura e responsabilidades](docs/ARQUITETURA.md)
 - [Conectores e permissões](docs/CONECTORES.md)
+- [Workspaces e contexto financeiro](docs/WORKSPACES.md)
 - [Favoritos e convidados de eventos](docs/CONVIDADOS.md)
 - [Verificação Google e roteiro de demonstração](docs/GOOGLE_VERIFICATION.md)
 - [Notificações e assinaturas](docs/NOTIFICACOES.md)

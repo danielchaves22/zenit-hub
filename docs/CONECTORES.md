@@ -9,7 +9,7 @@ Revisão documental: 02/10/2026. Use [.env.example](../.env.example) como refer�
 3. Aponte `CASH_API_URL` para a origem HTTPS do Cash. `CASH_CONNECT_URL` é opcional e aponta ao perfil/integrações do Cash.
 4. Mantenha `CASH_BINDING_PREFIX` igual ao `WHATSAPP_BINDING_MESSAGE_PREFIX` do Cash (padrão `VINCULAR ZENIT`).
 
-A ponte é uma integração interna de primeira parte, com assinatura HMAC, timestamp, nonce e deduplicação por ID de mensagem. Não é um servidor OAuth público nem um acesso administrativo ao banco. Cash resolve o remetente pelo vínculo validado por QR Code e verifica usuário/workspace, acesso aos aplicativos e permissões financeiras em cada execução. Hub nunca fornece `userId`, `companyId` ou `role`.
+A ponte é uma integração interna de primeira parte, com assinatura HMAC, timestamp, nonce e deduplicação por ID de mensagem. Não é um servidor OAuth público nem um acesso administrativo ao banco. Cash resolve o remetente pelo vínculo validado por QR Code e verifica usuário/workspace, acesso aos aplicativos e permissões financeiras em cada execução. Hub nunca fornece `userId` ou `role`; `workspaceId` apenas seleciona um contexto e exige revalidação no Cash. Veja [Workspaces](WORKSPACES.md) para seleção, isolamento de histórico e confirmações.
 
 O registro de mensagens já existente no Cash é reutilizado, sem nova migração. Os endpoints e o assistente web/mobile continuam disponíveis. A compatibilidade inicial da ponte Cash usa remetentes numéricos do fluxo existente; suportar outros identificadores do WhatsApp requer evoluir também o vínculo do Cash.
 

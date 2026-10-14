@@ -474,6 +474,9 @@ test('daily summary honors local midnight, connected selections, partial failure
     };
     const s = await f.subscribe();
     s.data.sources = ['calendar', 'cash', 'day'];
+    const workspace = { id: 3, name: 'Casa', personal: true, reference: '7:3', cash: true };
+    s.data.cashWorkspace = workspace;
+    f.n.cash.status = async () => ({ connected: true, workspace, workspaces: [workspace] });
     const values = await f.n.summary(s, date);
     assert.equal(values.length, 4);
     assert.match(values[1], /09:00 Consulta/);
