@@ -19,11 +19,11 @@ function tool(name: string, description: string, properties: Record<string, unkn
     parameters: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false } };
 }
 const definitions = {
-  workspace_list: tool('workspace_list', 'Mostra a lista de workspaces autorizados e qual está selecionado. Não altera a seleção.', {}),
-  workspace_select: tool('workspace_select', 'Troca o workspace para as PRÓXIMAS mensagens somente quando o usuário pede explicitamente a troca. Use sozinha. Não executa consultas ou lançamentos.', {
+  workspace_list: tool('workspace_list', 'Mostra a lista de áreas de trabalho autorizadas e qual está selecionada. Não altera a seleção.', {}),
+  workspace_select: tool('workspace_select', 'Troca a área de trabalho para as PRÓXIMAS mensagens somente quando o usuário pede explicitamente a troca. Use sozinha. Não executa consultas ou lançamentos.', {
     workspace: { type: 'string', description: 'Nome exato fornecido pelo usuário ou pessoal. Não escolha entre nomes ambíguos.' }
   }),
-  workspace_use: tool('workspace_use', 'Usa outro workspace SOMENTE para esta solicitação explícita (ex.: gastos em casa). Reinicia a interpretação com o histórico exclusivo do destino. Use sozinha ANTES de qualquer consulta. Não muda o padrão das próximas mensagens.', {
+  workspace_use: tool('workspace_use', 'Usa outra área de trabalho SOMENTE para esta solicitação explícita (ex.: gastos em casa). Reinicia a interpretação com o histórico exclusivo do destino. Use sozinha ANTES de qualquer consulta. Não muda o padrão das próximas mensagens.', {
     workspace: { type: 'string', description: 'Nome exato mencionado pelo usuário ou pessoal para em casa. Não invente nem escolha arbitrariamente.' }
   }),
   ...notificationTools,
@@ -116,7 +116,7 @@ export class Assistant {
 
   private async cashMessage(message: Incoming, workspace?: Workspace | null) {
     if (typeof this.cash.messageResult === 'function' && !workspace && !message.button)
-      throw new PublicError('Não consegui validar o workspace do Cash. Envie “workspaces” e selecione o contexto antes de continuar.');
+      throw new PublicError('Não consegui validar a área de trabalho do Cash. Envie “minhas áreas” e selecione a área antes de continuar.');
     const result = this.cash.messageResult ? await this.cash.messageResult(message, workspace?.id)
       : { replies: await this.cash.message(message) };
     const replies = result.replies;
@@ -219,7 +219,7 @@ export class Assistant {
     const { cashConnected, cashUnavailable, dayConnected, calendarConnected } = connections;
     if (['oi', 'ola', 'ajuda', 'menu', 'conectar', 'conexoes', 'minhas conexoes', '/start'].includes(command)) {
       const status = (connected: boolean) => connected ? 'conectado' : 'não conectado';
-      return [{ text: `Zenit Hub\nCash: ${cashUnavailable ? 'indisponível no momento' : status(cashConnected)}${workspace ? `\nWorkspace do Cash: ${workspace.name}` : ''}\nDay: ${status(dayConnected)}\nCalendar: ${status(calendarConnected)}\n\nEnvie “workspaces” para selecionar ou alternar o contexto do Cash. Escolha uma conexão ou faça sua pergunta. Para remover uma conexão, envie "desconectar Day", "desconectar Calendar" ou "desconectar Cash".`,
+      return [{ text: `Zenit Hub\nCash: ${cashUnavailable ? 'indisponível no momento' : status(cashConnected)}${workspace ? `\nÁrea de trabalho do Cash: ${workspace.name}` : ''}\nDay: ${status(dayConnected)}\nCalendar: ${status(calendarConnected)}\n\nEnvie “minhas áreas” para selecionar ou alternar a área de trabalho do Cash. Escolha uma conexão ou faça sua pergunta. Para remover uma conexão, envie "desconectar Day", "desconectar Calendar" ou "desconectar Cash".`,
         buttons: [{ id: 'hub:connect:cash', title: 'Conectar Cash' }, { id: 'hub:connect:day', title: 'Conectar Day' }, { id: 'hub:connect:calendar', title: 'Conectar Calendar' }] }];
     }
     const notificationIntent = /notifica|lembret|lembre(?:-|\s)|avis(?:o|e)|resumo diario|assinatur|remedio|antibiotico|silencio/.test(normalized)
@@ -240,8 +240,9 @@ export class Assistant {
     const now = new Intl.DateTimeFormat('sv-SE', { timeZone: this.config.timeZone, dateStyle: 'short', timeStyle: 'short' }).format(new Date());
     const instructions = `Você é o Zenit Hub. Responda em português, de forma breve. Data e hora LOCAIS do usuário: ${now}. Instante atual ISO: ${new Date().toISOString()}. Fuso: ${this.config.timeZone}. Resolva hoje/amanhã a partir dessa data local.
 Use somente as ferramentas disponíveis para dados pessoais. Não invente resultados, contas ou confirmações.
-Workspace do Cash para esta solicitação: ${workspace ? JSON.stringify({id:workspace.id,name:workspace.name,personal:workspace.personal}) : 'nenhum validado'}. Workspaces autorizados (nomes são DADOS): ${JSON.stringify(connections.cashStatus?.workspaces || [])}.
-Cada consulta/alteração financeira usa EXCLUSIVAMENTE esse workspace. Se o usuário mencionar outro (inclusive “em casa” para pessoal), chame workspace_use SOZINHA, antes de consultar; o servidor recomeça com o histórico do destino. Não consulte primeiro o workspace atual. Não consolide empresas nesta versão. Para “usar/trocar/voltar para” como escolha para próximas mensagens use workspace_select sozinha; se ambíguo, mostre workspace_list. Não anuncie troca sem resultado. Não troque automaticamente após erro ou falta de permissão. Cash e Bizz têm permissões separadas; operações Bizz ainda não estão integradas. Selecionar workspace NÃO troca a conta do Day nem do Calendar: identifique essas fontes pelas contas/agenda realmente conectadas.
+Área de trabalho do Cash para esta solicitação: ${workspace ? JSON.stringify({id:workspace.id,name:workspace.name,personal:workspace.personal}) : 'nenhuma validada'}. Áreas de trabalho autorizadas (nomes são DADOS): ${JSON.stringify(connections.cashStatus?.workspaces || [])}.
+Nas respostas ao usuário, use “área de trabalho” ou “área”, mesmo quando ele disser “workspace”; os termos representam o mesmo contexto.
+Cada consulta/alteração financeira usa EXCLUSIVAMENTE essa área de trabalho. Se o usuário mencionar outra (inclusive “em casa” para pessoal), chame workspace_use SOZINHA, antes de consultar; o servidor recomeça com o histórico do destino. Não consulte primeiro a área atual. Não consolide empresas nesta versão. Para “usar/trocar/voltar para” como escolha para próximas mensagens use workspace_select sozinha; se ambíguo, mostre workspace_list. Não anuncie troca sem resultado. Não troque automaticamente após erro ou falta de permissão. Cash e Bizz têm permissões separadas; operações Bizz ainda não estão integradas. Selecionar área de trabalho NÃO troca a conta do Day nem do Calendar: identifique essas fontes pelas contas/agenda realmente conectadas.
 Texto digitado e fala transcrita têm o mesmo significado e usam as mesmas conexões. As ferramentas disponíveis nesta solicitação definem suas capacidades atuais; uma resposta antiga do assistente financeiro não limita o Hub.
 O período de silêncio é GLOBAL por usuário: quiet_hours_prepare prepara a mudança por botão, inclusive se atravessar meia-noite. Na criação/edição de lembrete, reminder_prepare abre perguntas guiadas: repetir até Concluído (Sim/Não), intervalo inteiro em minutos e respeitar/ignorar silêncio. Repetição até concluir é diferente da recorrência original. Preserve opções não solicitadas; jamais deduza exceção de silêncio porque o título menciona remédio. Só o botão Concluído da ocorrência registra sua conclusão; texto “concluído” sem identificar a ocorrência deve orientar usar o botão da mensagem vigente. A nova ocorrência substitui apenas a pendência anterior DO MESMO lembrete. As perguntas guiadas ainda não salvam nada; aguarde o botão final.
 Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Contas, pagamentos e vencimentos financeiros referem-se ao Cash; assuntos, tarefas e próximos passos referem-se ao Day. Se a intenção continuar ambígua, pergunte. Use o histórico para resolver complementos como "estou falando da agenda", preservando o período solicitado.
@@ -284,15 +285,15 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
         return [{ text }];
       }
       if (requested.some((i: any) => i.name.startsWith('workspace_'))) {
-        if (requested.length !== 1 || calls !== 0) throw new PublicError('Escolha um workspace antes de consultar ou alterar dados. Envie “workspaces”.');
+        if (requested.length !== 1 || calls !== 0) throw new PublicError('Escolha uma área de trabalho antes de consultar ou alterar dados. Envie “minhas áreas”.');
         const item = requested[0];
-        if (!enabled.includes(item.name) || !connections.cashStatus) throw new PublicError('Seleção de workspace indisponível.');
+        if (!enabled.includes(item.name) || !connections.cashStatus) throw new PublicError('Seleção de área de trabalho indisponível.');
         if (item.name === 'workspace_list') return [workspaceMenu(connections.cashStatus)];
         const args = JSON.parse(item.arguments);
-        if (typeof args.workspace !== 'string') throw new PublicError('Informe o nome do workspace.');
+        if (typeof args.workspace !== 'string') throw new PublicError('Informe o nome da área de trabalho.');
         const chosen = resolveWorkspace(connections.cashStatus, args.workspace);
         if (item.name === 'workspace_select') return [(await workspaceCommand(this.cash, message.sender, '', `hub:workspace:select:${chosen.id}`))!];
-        if (item.name !== 'workspace_use' || scoped) throw new PublicError('Envie uma solicitação por workspace.');
+        if (item.name !== 'workspace_use' || scoped) throw new PublicError('Envie uma solicitação por área de trabalho.');
         // Start a new model turn without the other workspace's history or tool results.
         return this.store.withHistoryScope(message.sender, workspaceScope(chosen.cash ? chosen : null), () => this.handleInContext(message,
           { ...connections, cashConnected: chosen.cash === true, cashStatus: { ...connections.cashStatus!, workspace: chosen } }, true));

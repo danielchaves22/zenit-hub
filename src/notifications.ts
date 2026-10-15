@@ -103,7 +103,7 @@ export class Notifications {
           throw new PublicError('Conecte o Cash antes de incluí-lo nas notificações.');
         const status = await this.cash.status(sender);
         const w = cashWorkspace ? status.workspaces.find(w => w.id === cashWorkspace.id && w.reference === cashWorkspace.reference) : status.workspace;
-        if (!w?.cash) throw new PublicError('Selecione um workspace com acesso ao Cash antes de incluí-lo nas notificações.');
+        if (!w?.cash) throw new PublicError('Selecione uma área de trabalho com acesso ao Cash antes de incluí-la nas notificações.');
         accounts.cash = w.reference;
       } else {
         const c = await this.store.connection(sender, source);
@@ -133,7 +133,7 @@ export class Notifications {
     if (s.problem) return `${s.enabled ? 'assinatura mantida; envio interrompido' : 'pausado'}. ${notificationProblemText(s.problem, this.config.day.siteUrl)}`;
     if (!s.enabled) return 'pausado';
     if (s.kind === 'daily_summary' && s.data.sources.includes('cash')) {
-      if (!s.data.cashWorkspace) return 'ativo; Cash aguardando seleção de workspace. Selecione um workspace e solicite novamente o resumo diário';
+      if (!s.data.cashWorkspace) return 'ativo; Cash aguardando seleção de área de trabalho. Selecione uma área e solicite novamente o resumo diário';
       return `ativo; Cash: ${s.data.cashWorkspace.name}`;
     }
     if (s.kind === 'day_reminders' && Date.now() - s.checkedAt > 120_000)
@@ -303,7 +303,7 @@ export class Notifications {
       throw new PublicError('Escolha pelo menos uma fonte conectada: Cash, Day ou Calendar.');
     const accounts = await this.accounts(sender, [...sources]);
     const cashWorkspace = sources.includes('cash') ? (await this.cash.status(sender)).workspaces.find(w => w.reference === accounts.cash) : undefined;
-    if (sources.includes('cash') && !cashWorkspace) throw new PublicError('O acesso ao workspace mudou. Solicite o resumo novamente.');
+    if (sources.includes('cash') && !cashWorkspace) throw new PublicError('O acesso à área de trabalho mudou. Solicite o resumo novamente.');
     if (a.kind === 'day_reminders') await this.day.requireReminders(sender);
     await this.transport.require(a.kind);
     const data: Preferences = {
@@ -318,7 +318,7 @@ export class Notifications {
     return this.draft(
       sender,
       { type: 'subscription', kind: a.kind, data },
-      `Assinar ${names[a.kind]} pelo WhatsApp?\n${a.kind === 'daily_summary' ? `Todos os dias às ${data.time}, fuso ${data.timeZone}.\nFontes: ${data.sources.join(', ')}.${cashWorkspace ? `\nCash: ${cashWorkspace.name}. Este workspace fica fixo no resumo, mesmo após trocar o contexto da conversa.` : ''}\nO resumo consulta a agenda principal do Calendar e dados sincronizados.` : 'Receber todos os seus lembretes ativos e sincronizados do Day, nos horários definidos em cada lembrete.'}\n\nOs avisos poderão chegar sem uma mensagem sua antes. Você pode pausar a qualquer momento com “parar notificações”.\n\nConfirme pelo botão para ativar.`,
+      `Assinar ${names[a.kind]} pelo WhatsApp?\n${a.kind === 'daily_summary' ? `Todos os dias às ${data.time}, fuso ${data.timeZone}.\nFontes: ${data.sources.join(', ')}.${cashWorkspace ? `\nCash: ${cashWorkspace.name}. Esta área de trabalho fica fixa no resumo, mesmo após trocar a área da conversa.` : ''}\nO resumo consulta a agenda principal do Calendar e dados sincronizados.` : 'Receber todos os seus lembretes ativos e sincronizados do Day, nos horários definidos em cada lembrete.'}\n\nOs avisos poderão chegar sem uma mensagem sua antes. Você pode pausar a qualquer momento com “parar notificações”.\n\nConfirme pelo botão para ativar.`,
     );
   }
   async prepareReminder(sender: string, input: unknown, seen: Set<string>): Promise<Reply> {
@@ -582,7 +582,7 @@ export class Notifications {
             : 'Nenhum evento na agenda principal.';
         } else if (source === 'cash') {
           if (!s.data.cashWorkspace) {
-            sections.cash = 'Selecione o workspace e configure novamente o resumo diário para incluir o Cash. A assinatura anterior não identifica a empresa.';
+            sections.cash = 'Selecione a área de trabalho e configure novamente o resumo diário para incluir o Cash. A assinatura anterior não identifica a empresa.';
             continue;
           }
           const w = (await this.cash.status(s.sender)).workspaces.find(w => w.reference === s.data.cashWorkspace!.reference && w.cash);

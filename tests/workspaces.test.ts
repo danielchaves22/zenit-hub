@@ -34,12 +34,21 @@ async function fixture(model: typeof fetch = async () => { throw new Error('Unex
 test('workspace commands and native list switch authorized context without AI or new authentication', async () => {
   const f = await fixture();
   try {
-    const menu = await f.assistant.handle(message('Workspaces'));
-    assert.equal(menu[0].list?.rows.length, 2);
-    assert.match((await f.assistant.handle(message('', 'hub:workspace:select:4')))[0].text, /Empresa X/);
-    assert.match((await f.assistant.handle(message('workspace atual')))[0].text, /Empresa X/);
+    for (const command of ['Minhas áreas', 'Áreas de trabalho', 'area de trabalho', 'Trocar área', 'selecionar área de trabalho',
+      'workspace', 'Workspaces', 'meus workspaces', 'trocar workspace', 'minhas empresas']) {
+      const [menu] = await f.assistant.handle(message(command));
+      assert.equal(menu.list?.rows.length, 2, command);
+      assert.equal(menu.list?.button, 'Escolher área');
+      assert.match(menu.text, /^Área atual: Casa Daniel/);
+    }
+    assert.deepEqual(f.state.selections, []);
+    assert.match((await f.assistant.handle(message('', 'hub:workspace:select:4')))[0].text, /Área de trabalho alterada para Empresa X/);
+    for (const command of ['área atual', 'área de trabalho atual', 'qual área de trabalho?', 'workspace atual'])
+      assert.match((await f.assistant.handle(message(command)))[0].text, /^Área atual: Empresa X/);
     assert.match((await f.assistant.handle(message('voltar para o pessoal')))[0].text, /Casa Daniel/);
-    assert.deepEqual(f.state.selections, [4,3]);
+    assert.match((await f.assistant.handle(message('usar a área de trabalho Empresa X')))[0].text, /Área de trabalho alterada para Empresa X/);
+    assert.match((await f.assistant.handle(message('voltar para Casa')))[0].text, /Casa Daniel/);
+    assert.deepEqual(f.state.selections, [4,3,4,3]);
     await assert.rejects(f.assistant.handle(message('', 'hub:workspace:select:99')), /disponível/);
     await assert.rejects(f.assistant.handle(message('usar desconhecido')), /acessos autorizados/);
     assert.deepEqual(f.state.queries, []);
@@ -48,10 +57,15 @@ test('workspace commands and native list switch authorized context without AI or
 
 test('workspace resolution never chooses between duplicate names and pages respect WhatsApp limits', () => {
   const status = { connected: true, workspace: personal, workspaces: [personal, { ...business, name: personal.name }] };
-  assert.throws(() => resolveWorkspace(status, personal.name), /mais de um/);
+  assert.throws(() => resolveWorkspace(status, personal.name), /mais de uma área de trabalho/);
   assert.equal(resolveWorkspace(status, 'pessoal').id, 3);
+  assert.equal(resolveWorkspace(status, 'área de trabalho pessoal').id, 3);
+  assert.equal(resolveWorkspace(status, 'workspace pessoal').id, 3);
   status.workspaces = Array.from({ length: 24 }, (_, n) => ({ ...business, id: n + 1 }));
   assert.equal(workspaceMenu(status).list?.rows.length, 10);
+  assert.equal(workspaceMenu(status).list?.rows.at(-1)?.id, 'hub:workspace:page:1');
+  assert.equal(workspaceMenu(status).list?.rows.at(-1)?.title, 'Mais áreas');
+  assert.ok(workspaceMenu(status).list!.button.length <= 20);
   assert.equal(workspaceMenu(status, 2).list?.rows.length, 6);
 });
 
