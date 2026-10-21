@@ -177,7 +177,7 @@ test('listing requires explicit deletion intent and supports cancellation, filte
     assert.match(list.text,/10\. Lembrete 10/);
     assert(!list.text.includes('11. Lembrete 11'));
     assert.match(list.text,/Há mais lembretes/);
-    assert.match((await f.n.command(sender,'2'))!.text,/envie “excluir 2”/);
+    assert.match((await f.n.command(sender,'2'))!.text,/“excluir 2”/);
     for (const n of ['0','11','1.5','-1','1, 2']) {
       assert.match((await f.n.command(sender,n))!.text,/Escolha um único número/);
     }
@@ -261,6 +261,127 @@ test('natural-language deletion can ask the numbered selector directly without A
     assert.match(reply.text,/Qual lembrete deseja excluir/);
     assert.match(reply.text,/2\. Livro da biblioteca/);
     assert.equal(calls,1);
+    assert.equal(f.state.writes.length,0);
+  } finally {await f.store.close();}
+});
+
+test('numbered pause preserves the chosen reminder fields and requires explicit confirmation', async () => {
+  const f=await fixture();
+  try {
+    f.state.reminders=[savedReminder('Livro'),savedReminder('Remédio',{requires_confirmation:true,repeat_minutes:7,respect_quiet_hours:false})];
+    const original=f.state.reminders[1];
+    assert.match((await f.n.command(sender,'como pausar um lembrete'))!.text,/Qual lembrete deseja pausar/);
+    f.state.reminders.reverse();
+    let review=(await f.n.command(sender,'2'))!;
+    assert.match(review.text,/Remédio/);
+    assert.match(review.text,/Estado após confirmar: pausado/);
+    assert.equal(f.state.writes.length,0);
+    await f.n.confirm(sender,token(review),false);
+    assert.equal(f.state.writes.length,0);
+    await f.n.command(sender,'meus lembretes');
+    review=(await f.n.command(sender,'pausar 1'))!;
+    await f.n.confirm(sender,token(review),true);
+    const [, , id, revision, doc]=f.state.writes[0];
+    assert.equal(id,original.id);
+    assert.equal(revision,original.revision);
+    assert.deepEqual(doc,{title:original.title,subject_id:null,enabled:false,deleted:false,schedule:original.schedule,
+      requires_confirmation:true,repeat_minutes:7,respect_quiet_hours:false});
+    await f.subscribe();
+    assert.match((await f.n.command(sender,'pausar lembretes do day'))!.text,/envio pelo WhatsApp pausado/);
+    assert.equal((await f.n.db.subscription(sender,'day_reminders'))!.enabled,false);
+    assert.equal(f.state.writes.length,1);
+  } finally {await f.store.close();}
+});
+
+test('numbered edit binds the target on the server across restart, uses natural changes and keeps the confirmation flow', async () => {
+  const f=await fixture();
+  try {
+    const rule={...schedule,kind:'weekly',weekDays:[4],times:['06:30']};
+    f.state.reminders=[savedReminder('Livro',{schedule:rule}),savedReminder('Livro',{schedule:{...rule,weekDays:[5]}})];
+    const selected=f.state.reminders[1];
+    await f.n.command(sender,'editar lembrete');
+    const question=(await f.n.command(sender,'2'))!;
+    assert.match(question.text,/O que deseja alterar/);
+    assert.equal(f.state.writes.length,0);
+    const restarted=new Notifications(config,f.store,f.day as any,f.cash as any,{} as any,f.n.transport);
+    let calls=0;
+    const a=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{
+      tryGuestNumbers:async()=>{throw new Error('Selected reminder edits must not consume Calendar numbers');},
+    } as any,async(_url,init)=>{
+      calls++;
+      const body=JSON.parse(String(init?.body));
+      const tool=body.tools.find((t:any)=>t.name==='reminder_edit_selected');
+      assert(tool);
+      assert(!('id' in tool.parameters.properties));
+      assert(!('operation' in tool.parameters.properties));
+      assert(body.instructions.includes(JSON.stringify(selected.schedule)));
+      return new Response(JSON.stringify({output:[{type:'function_call',name:'reminder_edit_selected',call_id:'edit',
+        arguments:JSON.stringify({title:null,schedule:{...selected.schedule,times:['21:00']},requiresConfirmation:null,repeatMinutes:null,respectQuietHours:null})}]}));
+    },undefined,restarted);
+    let [reply]=await a.handle({id:'edit-time',sender,text:'Mude o horário para 21h',timestamp:Date.now()/1000});
+    assert.match(reply.text,/até marcar como concluído/);
+    assert.equal(calls,1);
+    assert.equal(f.state.writes.length,0);
+    reply=(await restarted.command(sender,'',reply.buttons![1].id))!;
+    reply=(await restarted.command(sender,'',reply.buttons![0].id))!;
+    assert.match(reply.text,/21:00/);
+    assert.match(reply.text,/Semanalmente: sex/);
+    await restarted.confirm(sender,token(reply),true);
+    assert.equal(f.state.writes[0][2],selected.id);
+    assert.deepEqual(f.state.writes[0][4].schedule,{...selected.schedule,times:['21:00']});
+    assert.equal(f.state.writes[0][4].title,'Livro');
+  } finally {await f.store.close();}
+});
+
+test('edit selection rejects another sender, expired or changed data, and supports cancel and replacement', async () => {
+  const f=await fixture();
+  const change={title:'Livro atualizado',schedule:null,requiresConfirmation:null,repeatMinutes:null,respectQuietHours:null};
+  try {
+    f.state.reminders=[savedReminder('Livro'),savedReminder('Água')];
+    await f.n.command(sender,'meus lembretes');
+    const question=(await f.n.command(sender,'editar 1'))!;
+    await assert.rejects(f.n.prepareSelectedReminder('bob',change),/Escolha o lembrete/);
+    await f.n.command(sender,'cancelar');
+    await assert.rejects(f.n.prepareSelectedReminder(sender,change),/Escolha o lembrete/);
+    await f.n.command(sender,'editar lembrete');
+    await f.n.command(sender,'1');
+    await f.store.db.query('UPDATE notification_drafts SET expires=0 WHERE sender=$1',[sender]);
+    await assert.rejects(f.n.prepareSelectedReminder(sender,change),/expirou/);
+    await f.n.command(sender,'editar lembrete');
+    await f.n.command(sender,'1');
+    f.state.reminders[0].revision++;
+    await assert.rejects(f.n.prepareSelectedReminder(sender,change),/mudou desde a seleção/);
+    await f.n.command(sender,'editar lembrete');
+    await f.n.command(sender,'1');
+    await f.connect('another-account');
+    await assert.rejects(f.n.prepareSelectedReminder(sender,change),/Escolha o lembrete/);
+    await f.n.command(sender,'editar lembrete');
+    await f.n.command(sender,'2');
+    const context=await f.n.selection.editContext(sender);
+    assert.equal(context!.id,f.state.reminders[1].id);
+    assert.equal(f.state.writes.length,0);
+    assert(question.buttons![0].id.startsWith('hub:notify:cancel:'));
+  } finally {await f.store.close();}
+});
+
+test('a new Calendar conversation cancels a selected edit and numeric answers stay with Calendar', async () => {
+  const f=await fixture();
+  try {
+    f.state.reminders=[savedReminder('Livro')];
+    await f.n.command(sender,'editar lembrete');
+    await f.n.command(sender,'1');
+    const a=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{
+      openGuests:async()=>({text:'Escolha convidados: 1. Ana'}),
+      tryGuestNumbers:async()=>({text:'Ana selecionada'}),
+    } as any,async()=>{throw new Error('No AI needed');},undefined,f.n);
+    await a.handle({id:'guest-after-edit',sender,text:'',button:`hub:calendar:guests:${randomBytes(32).toString('base64url')}`,timestamp:Date.now()/1000});
+    assert.equal(await f.n.selection.editContext(sender),null);
+    assert.match((await a.handle({id:'guest-number',sender,text:'1',timestamp:Date.now()/1000}))[0].text,/Ana selecionada/);
+    await f.n.command(sender,'editar lembrete');
+    await f.n.command(sender,'1');
+    f.state.authorized=false;
+    assert.match((await a.handle({id:'menu-after-revoke',sender,text:'menu',timestamp:Date.now()/1000}))[0].text,/Zenit Hub/);
+    assert.equal(await f.n.selection.editContext(sender),null);
     assert.equal(f.state.writes.length,0);
   } finally {await f.store.close();}
 });

@@ -98,8 +98,8 @@ export const notificationTools = {
   ),
   reminder_choices: tool(
     'reminder_choices',
-    'Mostra diretamente uma lista numerada dos lembretes do Day. Use sozinha para listar ou para escolher qual excluir, inclusive quando o usuário pergunta COMO remover ou há nomes ambíguos. O usuário responde com o número; o Hub resolve o ID e exige confirmação antes de excluir. Não invente numeração no texto da IA.',
-    { purpose: { type: 'string', enum: ['list', 'delete'] },
+    'Mostra diretamente uma lista numerada dos lembretes do Day. Use sozinha para listar ou escolher qual editar, pausar ou excluir, inclusive perguntas COMO fazer ou nomes ambíguos. O usuário responde com o número; o Hub resolve o ID. Editar pede depois os novos dados; todas as escritas exigem confirmação. Não invente numeração no texto da IA.',
+    { purpose: { type: 'string', enum: ['list', 'delete', 'pause', 'update'] },
       search: { type: ['string', 'null'], description: 'Trecho do título fornecido pelo usuário; null para todos. A lista mostra até 10 resultados; refine o trecho se truncar.' } },
   ),
   reminder_prepare: tool(
@@ -134,3 +134,8 @@ export const notificationTools = {
     },
   ),
 };
+
+export const reminderEditTool = tool('reminder_edit_selected',
+  'Prepara alterações somente do lembrete já escolhido por número e vinculado pelo servidor. Use sozinha. Não recebe ID nem título como identificador: title é apenas o NOVO texto, se solicitado. Preserve com null os campos não alterados. schedule é a regra completa, preservando todos os componentes não solicitados a partir dos dados atuais. Não invente horários; peça esclarecimento se necessário. Continua nas perguntas de opções e na confirmação final; não salva automaticamente.',
+  Object.fromEntries(Object.entries(notificationTools.reminder_prepare.parameters.properties).filter(([key]) => !['operation', 'id'].includes(key))),
+);

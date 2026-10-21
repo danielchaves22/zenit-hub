@@ -97,8 +97,8 @@ export class Notifications {
     this.queue = new ReminderQueue(store);
     this.dialogs = new NotificationDialogs(this.db,this.queue,config.timeZone,(sender,data,text)=>this.draft(sender,data,text));
     this.reminders = new ReminderRunner(this.queue,this.db,day,transport,(s,error,now)=>this.db.problem(s,dayProblem(error),now));
-    this.selection = new ReminderSelection(this.db,day,(sender,id,reference)=>this.prepareReminder(sender,
-      {operation:'delete',id,title:null,schedule:null},new Set([id]),reference));
+    this.selection = new ReminderSelection(this.db,day,(sender,operation,id,reference)=>this.prepareReminder(sender,
+      {operation,id,title:null,schedule:null},new Set([id]),reference));
   }
   private async accounts(sender: string, sources: Preferences['sources'], cashWorkspace?: Preferences['cashWorkspace']) {
     const accounts: Record<string, string> = {};
@@ -328,6 +328,12 @@ export class Notifications {
       `Assinar ${names[a.kind]} pelo WhatsApp?\n${a.kind === 'daily_summary' ? `Todos os dias às ${data.time}, fuso ${data.timeZone}.\nFontes: ${data.sources.join(', ')}.${cashWorkspace ? `\nCash: ${cashWorkspace.name}. Esta área de trabalho fica fixa no resumo, mesmo após trocar a área da conversa.` : ''}\nO resumo consulta a agenda principal do Calendar e dados sincronizados.` : 'Receber todos os seus lembretes ativos e sincronizados do Day, nos horários definidos em cada lembrete.'}\n\nOs avisos poderão chegar sem uma mensagem sua antes. Você pode pausar a qualquer momento com “parar notificações”.\n\nConfirme pelo botão para ativar.`,
     );
   }
+  async prepareSelectedReminder(sender: string, input: Record<string, unknown>): Promise<Reply> {
+    const selected = await this.selection.editContext(sender);
+    if (!selected) throw new PublicError('Escolha o lembrete novamente com “editar lembrete”.');
+    if (!Object.values(input).some(value => value !== null)) throw new PublicError('Diga o que deseja alterar no lembrete, ou envie “cancelar”.');
+    return this.prepareReminder(sender, {...input,operation:'update',id:selected.id},new Set([selected.id]),selected);
+  }
   async prepareReminder(sender: string, input: unknown, seen: Set<string>, reference?: ReminderReference): Promise<Reply> {
     const parsed = reminderChange.safeParse(input);
     if (!parsed.success) throw new PublicError('Horário ou recorrência inválidos. Peça ao usuário para confirmar os horários no formato HH:MM, de 00:00 a 23:59. Não corrija nem crie o lembrete por suposição.');
@@ -335,7 +341,7 @@ export class Notifications {
     await this.day.requireReminders(sender);
     const account = (await this.accounts(sender, ['day'])).day;
     if (reference && account !== reference.account)
-      throw new PublicError('A conta do Day mudou. Envie “remover lembrete” para consultar a nova lista.');
+      throw new PublicError('A conta do Day mudou. Envie “meus lembretes” para consultar a nova lista.');
     let doc: any,
       revision = 0,
       id = a.id || randomUUID();
@@ -350,7 +356,7 @@ export class Notifications {
       const r = (await this.day.reminders(sender, a.id)).items[0];
       if (!r || r.deleted) throw new PublicError('Lembrete não encontrado. Consulte “meus lembretes” novamente.');
       if (reference && r.revision !== reference.revision)
-        throw new PublicError('O lembrete mudou desde a listagem. Envie “remover lembrete” para revisar a versão atual.');
+        throw new PublicError('O lembrete mudou desde a listagem. Envie “meus lembretes” para revisar a versão atual.');
       revision = r.revision;
       doc = {
         title: r.title,

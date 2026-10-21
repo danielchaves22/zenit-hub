@@ -6,7 +6,7 @@ Backend de conexões para conversar com Cash, Day e Google Calendar pelo WhatsAp
 
 - Consultas financeiras, inclusive gastos realizados com filtros, totais e média mensal; escritas continuam no fluxo confirmado do Cash.
 - Seleção e alternância de área de trabalho pelo WhatsApp, com contexto identificado nas respostas e confirmações. Envie `minhas áreas` ou `workspaces`; veja [comandos e limites](docs/WORKSPACES.md).
-- Consulta de assuntos do Day e gestão de lembretes com autorização adicional. Para excluir pelo WhatsApp, `remover lembrete` abre uma lista numerada; escolha o número e confirme pelo botão.
+- Consulta de assuntos do Day e gestão de lembretes com autorização adicional. `editar lembrete`, `pausar lembrete` e `remover lembrete` abrem listas numeradas no WhatsApp. Escolha o número; na edição, diga depois o que deseja mudar. Toda alteração exige revisão e confirmação pelo botão.
 - Consulta, criação, alteração e exclusão de eventos comuns no Calendar, com prévia e confirmação.
 - Convidados favoritos pessoais no Hub, geridos pelo WhatsApp; seleção ao criar eventos e inclusão em eventos existentes da agenda organizadora, preservando participantes e respostas. Convites somente após confirmação. Seleção múltipla via Flow quando publicado/configurado, ou números/nomes pelo chat; a inclusão em eventos existentes também aceita e-mails informados diretamente.
 - Texto e voz pelo mesmo fluxo; transcrição única no Hub.
