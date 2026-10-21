@@ -93,8 +93,14 @@ export const notificationTools = {
   ),
   reminder_list: tool(
     'reminder_list',
-    'Consulta lembretes personalizados no Day. Use search para encontrar pelo título quando a lista truncar. Precisa de autorização específica; a conexão antiga só de assuntos não basta. IDs para alterar devem vir desta consulta.',
+    'Consulta dados de lembretes personalizados no Day para análises e alterações por título identificado. Para mostrar uma lista ao usuário ou escolher qual excluir, use reminder_choices, que mantém a numeração no servidor. Use search para encontrar pelo título quando a lista truncar. Precisa de autorização específica. IDs para alterar devem vir desta consulta.',
     {search:{type:['string','null'],description:'Trecho do título; null para todos.'},limit:{type:'integer',minimum:1,maximum:20}},
+  ),
+  reminder_choices: tool(
+    'reminder_choices',
+    'Mostra diretamente uma lista numerada dos lembretes do Day. Use sozinha para listar ou para escolher qual excluir, inclusive quando o usuário pergunta COMO remover ou há nomes ambíguos. O usuário responde com o número; o Hub resolve o ID e exige confirmação antes de excluir. Não invente numeração no texto da IA.',
+    { purpose: { type: 'string', enum: ['list', 'delete'] },
+      search: { type: ['string', 'null'], description: 'Trecho do título fornecido pelo usuário; null para todos. A lista mostra até 10 resultados; refine o trecho se truncar.' } },
   ),
   reminder_prepare: tool(
     'reminder_prepare',

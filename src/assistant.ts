@@ -150,6 +150,12 @@ export class Assistant {
     }
     const normalized = message.text.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.!?]+$/, '');
     const command = message.button?.startsWith('hub:connect:') ? `conectar ${message.button.split(':')[2]}` : normalized;
+    const notificationReply = await this.notifications.command(message.sender,command,message.button,message.text);
+    if(notificationReply) {
+      await this.store.addHistory(message.sender,'user',message.text||'[Botão de notificações]');
+      await this.store.addHistory(message.sender,'assistant',notificationReply.text);
+      return [notificationReply];
+    }
     if (typeof this.cash.status === 'function' && !await this.store.cashDisabled(message.sender)) {
       const reply = await workspaceCommand(this.cash, message.sender, command, message.button, connections.cashStatus);
       if (reply) return [reply];
@@ -170,12 +176,6 @@ export class Assistant {
       ? await this.calendar.openGuests(message.sender, guestDecision[2]) : await this.calendar.selectGuests(message.sender, guestDecision[2], []));
     if (['meus convidados', 'convidados favoritos', 'meus favoritos', 'listar favoritos'].includes(command)) return recordGuestReply(await this.guests.listing(message.sender));
     if (command === 'sem convidados') return recordGuestReply(await this.calendar.selectGuestNames(message.sender, []));
-    const notificationReply = await this.notifications.command(message.sender,command,message.button);
-    if(notificationReply) {
-      await this.store.addHistory(message.sender,'user',message.text||'[Botão de notificações]');
-      await this.store.addHistory(message.sender,'assistant',notificationReply.text);
-      return [notificationReply];
-    }
     const guestNumbers = !message.button ? guestNumberChoices(message.text) : null;
     if (guestNumbers) {
       const reply = await this.calendar.tryGuestNumbers(message.sender, guestNumbers);
@@ -249,6 +249,7 @@ Compromissos e agenda, sem indicação financeira, referem-se ao Calendar. Conta
 Para consultar um fim de semana, o padrão é sábado e domingo: de sábado às 00:00 até segunda-feira às 00:00 EXCLUSIVA no fuso do usuário. Só inclua sexta ou segunda se o usuário pedir. Confira que os limites da ferramenta correspondem aos dias descritos na resposta.
 Cash mantém cálculos e permissões financeiras. Assuntos e tarefas do Day só permitem leitura. Lembretes do Day permitem gestão com consentimento específico e botão de confirmação. Calendar permite consultar, criar, alterar e excluir eventos comuns; escritas SEMPRE geram uma prévia e dependem do botão de confirmação. Texto "sim" ou "confirmar" não autoriza gravação; oriente usar o botão.
 O Hub oferece notificações proativas de WhatsApp: resumo diário e lembretes recorrentes do Day. Consulte notification_catalog para capacidades e estado real; não confunda com popups do Calendar nem repita limitações antigas no histórico. notification_status mostra assinaturas/entregas. Para assinatura use notification_prepare; para parar envio use notification_pause. Nunca diga que assinou sem confirmação. Para um lembrete independente como tomar água/remédio, use reminder_list/reminder_prepare, nunca um evento do Calendar. Conectar Day não autoriza lembretes automaticamente; se a ferramenta retornar link de autorização, mostre-o. Assinar envio é separado de criar lembrete. Não invente horário ausente nem corrija 155h para 15h sem perguntar. Para remédio, registre somente o texto e os horários pedidos; não recomende dose, duração ou alteração do tratamento. Fontes conectadas nesta solicitação: ${[cashConnected?'cash':'',dayConnected?'day':'',calendarConnected?'calendar':''].filter(Boolean).join(', ')}.
+Para mostrar a lista de lembretes, use reminder_choices com purpose=list. Se perguntar como remover, pedir exclusão sem identificar o lembrete ou houver vários candidatos, use reminder_choices com purpose=delete e search com o trecho informado (ou null). A lista numerada é enviada diretamente pelo Hub; não peça o título completo. Números só podem ser resolvidos pelo servidor contra a lista vigente: nunca associe um número a um ID/título pelo histórico, nem use reminder_prepare para contornar uma lista expirada. Oriente abrir “remover lembrete” novamente se não houver seleção válida. reminder_list permanece disponível para consultar detalhes, análises e encontrar um título explicitamente identificado.
 Para "quanto gastei", lançamentos realizados, listagem de despesas e médias use cash_expenses; nunca calcule gastos a partir de saldos, pendências, uma página de lançamentos ou valores mencionados anteriormente. Mostre os valores calculados fora do cartão, no cartão e o total. Créditos de cartão, quando presentes, devem aparecer separados do gasto bruto e do total líquido. A data é de compra/competência, não de pagamento da fatura. Média padrão é MENSAL: use monthlyAverage e monthCount retornados. Se faltar período para uma média, pergunte. "Últimos N meses" usa N meses completos anteriores, salvo pedido para incluir o atual. Meses parciais devem ser identificados como parciais, sem extrapolar. Respeite os erros de categoria: peça esclarecimento sem remover o filtro. Para continuar listagem, preserve período/categoria e avance a página. Indique hasMore/categoriesTruncated, sem alegar listagem completa.
 Nas consultas de gastos, fixedExpenses = ALL inclui fixas e não fixas (padrão); ONLY_FIXED para somente fixas; EXCLUDE_FIXED para sem fixas. Preserve esse filtro ao continuar a consulta ou trocar apenas período/categoria. Informe o filtro aplicado e identifique as fixas na listagem usando isFixed. A origem vem do vínculo registrado no Cash, inclusive para estornos; nunca deduza pela descrição, categoria ou parcelamento. O filtro vale para totais, médias e listagens e não inclui previsões ou pendências.
 Para alterar ou excluir, consulte os eventos na mesma solicitação, identifique título/data/agenda sem ambiguidades e use o ID retornado. Nunca invente IDs nem escolha arbitrariamente entre eventos semelhantes. Não diga que gravou sem resultado da API.
@@ -323,13 +324,14 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
             return recordGuestReply(item.name === 'guest_favorite_prepare' ? await this.guests.prepare(message.sender, args)
               : await this.calendar.selectGuestNames(message.sender, args.names));
           }
-          if(['notification_catalog','notification_status','notification_prepare','notification_pause','reminder_prepare','quiet_hours_prepare'].includes(item.name)) {
+          if(['notification_catalog','notification_status','notification_prepare','notification_pause','reminder_prepare','reminder_choices','quiet_hours_prepare'].includes(item.name)) {
             if(requested.length!==1) throw new PublicError('Envie uma configuração de notificação por vez.');
             let reply: Reply;
             if(item.name==='notification_catalog') reply=await this.notifications.catalog(message.sender);
             else if(item.name==='notification_status') reply=await this.notifications.status(message.sender);
             else if(item.name==='notification_prepare') reply=await this.notifications.prepare(message.sender,args);
             else if(item.name==='reminder_prepare') reply=await this.notifications.prepareReminder(message.sender,args,remindersSeen);
+            else if(item.name==='reminder_choices') reply=await this.notifications.selection.listing(message.sender,args);
             else if(item.name==='quiet_hours_prepare') reply=await this.notifications.dialogs.prepareQuiet(message.sender,args);
             else {
               if(!['daily_summary','day_reminders','all'].includes(args.kind)) throw new Error('Invalid subscription');

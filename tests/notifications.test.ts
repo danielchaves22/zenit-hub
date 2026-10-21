@@ -91,9 +91,11 @@ async function fixture() {
       if (state.pollError) throw state.pollError;
       return { items: state.occurrences, truncated: false };
     },
-    reminders: async (_s: string, id?: string) => {
+    reminders: async (_s: string, id?: string, filter: {search?: string|null;limit?: number} = {}) => {
       if (!state.authorized) throw new Error('revoked');
-      return { items: state.reminders.filter((r) => !id || r.id === id), truncated: false };
+      const items = state.reminders.filter((r) => (!id || r.id === id) && !r.deleted && (!filter.search || r.title.toLowerCase().includes(filter.search.toLowerCase())));
+      const limit = filter.limit ?? 20;
+      return { items: items.slice(0, limit), truncated: items.length > limit };
     },
     daily: async () => ({ items: [], truncated: false }),
     previewReminder: async () => [new Date(Date.now() + 86400_000).toISOString()],
@@ -127,6 +129,141 @@ async function fixture() {
   };
   return { store, state, day, cash, n, subscribe, connect };
 }
+
+const savedReminder = (title: string, overrides: Record<string, unknown> = {}) => ({
+  id: randomUUID(), revision: 1, title, enabled: true, deleted: false, subject_id: null,
+  schedule, requires_confirmation: false, repeat_minutes: 5, respect_quiet_hours: true, ...overrides,
+});
+
+test('numbered deletion uses the displayed snapshot, survives restart and still requires the owner confirmation', async () => {
+  const f = await fixture();
+  try {
+    f.state.reminders = [savedReminder('Livro da Cibele'), savedReminder('Remédio')];
+    const selectedId = f.state.reminders[1].id;
+    const a = new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{} as any,
+      async () => { throw new Error('Numbered deletion must not call AI'); },undefined,f.n);
+    const send = (text: string, button?: string) => a.handle({id:randomUUID(),sender,text,button,timestamp:Date.now()/1000});
+    const [list] = await send('Como remover um lembrete?');
+    assert.match(list.text,/1\. Livro da Cibele/);
+    assert.match(list.text,/2\. Remédio/);
+    assert.match(list.text,/somente com o número/);
+    assert.equal(f.state.writes.length,0);
+    assert.match((await f.n.command('bob','excluir 2'))!.text,/nova lista/);
+    const raw = JSON.stringify((await f.store.db.query('SELECT data FROM notification_drafts')).rows);
+    assert(!raw.includes(selectedId));
+    f.state.reminders.reverse();
+    const restarted = new Notifications(config,f.store,f.day as any,f.cash as any,{} as any);
+    const review = (await restarted.command(sender,'2'))!;
+    assert.match(review.text,/Remédio/);
+    assert.match(review.text,/Estado após confirmar: excluído/);
+    assert(!review.text.includes('Livro da Cibele'));
+    assert.equal(f.state.writes.length,0);
+    await restarted.confirm('bob',token(review),true);
+    assert.equal(f.state.writes.length,0);
+    await send('',review.buttons![0].id);
+    await send('',review.buttons![0].id);
+    assert.equal(f.state.writes.length,1);
+    assert.equal(f.state.writes[0][2],selectedId);
+    assert.equal(f.state.writes[0][3],1);
+    assert.equal(f.state.writes[0][4].deleted,true);
+  } finally { await f.store.close(); }
+});
+
+test('listing requires explicit deletion intent and supports cancellation, filtering and bounded results', async () => {
+  const f = await fixture();
+  try {
+    f.state.reminders = Array.from({length:12},(_,i)=>savedReminder(`Lembrete ${i+1}`));
+    const list = (await f.n.command(sender,'meus lembretes'))!;
+    assert.match(list.text,/10\. Lembrete 10/);
+    assert(!list.text.includes('11. Lembrete 11'));
+    assert.match(list.text,/Há mais lembretes/);
+    assert.match((await f.n.command(sender,'2'))!.text,/envie “excluir 2”/);
+    for (const n of ['0','11','1.5','-1','1, 2']) {
+      assert.match((await f.n.command(sender,n))!.text,/Escolha um único número/);
+    }
+    const review = (await f.n.command(sender,'excluir 2'))!;
+    assert.match(review.text,/Lembrete 2/);
+    await f.n.confirm(sender,token(review),false);
+    assert.equal(f.state.writes.length,0);
+    await f.n.command(sender,'remover lembrete contendo lembrete 12');
+    const last = (await f.n.command(sender,'1'))!;
+    assert.match(last.text,/Lembrete 12/);
+    assert.match((await f.n.selection.listing(sender,{purpose:'delete',search:'inexistente'})).text,/Não encontrei/);
+    assert.equal(await f.n.db.pending(sender),null);
+    const replacement = (await f.n.command(sender,'remover lembrete'))!;
+    await f.n.command(sender,'',replacement.buttons![0].id);
+    assert.equal(await f.n.db.pending(sender),null);
+    f.state.reminders=[savedReminder('Remédio da manhã')];
+    assert.match((await f.n.command(sender,'remover lembrete contendo remedio',undefined,'Remover lembrete contendo Remédio?'))!.text,/1\. Remédio da manhã/);
+    assert.equal(f.state.writes.length,0);
+  } finally { await f.store.close(); }
+});
+
+test('numbered deletion rejects expired, changed and removed reminders and changed Day identity', async () => {
+  const f = await fixture();
+  try {
+    f.state.reminders = [savedReminder('Livro')];
+    await f.n.command(sender,'remover lembrete');
+    await f.store.db.query('UPDATE notification_drafts SET expires=0 WHERE sender=$1',[sender]);
+    assert.match((await f.n.command(sender,'1'))!.text,/lista expirou/);
+    await f.n.command(sender,'qual meu saldo');
+    assert.equal(await f.n.command(sender,'1'),null);
+    await f.n.command(sender,'remover lembrete');
+    f.state.reminders[0].revision++;
+    await assert.rejects(f.n.command(sender,'1'),/mudou desde a listagem/);
+    await f.n.command(sender,'remover lembrete');
+    f.state.reminders[0].deleted=true;
+    await assert.rejects(f.n.command(sender,'1'),/não encontrado/);
+    f.state.reminders[0].deleted=false;
+    await f.n.command(sender,'remover lembrete');
+    await f.connect('different-account');
+    assert.match((await f.n.command(sender,'excluir 1'))!.text,/nova lista/);
+    await f.n.command(sender,'remover lembrete');
+    f.state.authorized=false;
+    await assert.rejects(f.n.command(sender,'1'),/consent required/);
+    assert.equal(f.state.writes.length,0);
+  } finally { await f.store.close(); }
+});
+
+test('a new Calendar choice invalidates reminder numbers before interpreting another numeric reply', async () => {
+  const f = await fixture();
+  try {
+    f.state.reminders=[savedReminder('Livro')];
+    await f.n.command(sender,'remover lembrete');
+    let guestChoices=0;
+    const calendar = {
+      openGuests: async () => ({text:'Escolha convidados: 1. Ana'}),
+      tryGuestNumbers: async () => {guestChoices++;return {text:'Ana selecionada'};},
+    };
+    const a=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,calendar as any,
+      async()=>{throw new Error('No AI needed');},undefined,f.n);
+    await a.handle({id:'guest',sender,text:'',button:`hub:calendar:guests:${randomBytes(32).toString('base64url')}`,timestamp:Date.now()/1000});
+    const reply=await a.handle({id:'choice',sender,text:'1',timestamp:Date.now()/1000});
+    assert.match(reply[0].text,/Ana selecionada/);
+    assert.equal(guestChoices,1);
+    assert.equal(f.state.writes.length,0);
+  } finally {await f.store.close();}
+});
+
+test('natural-language deletion can ask the numbered selector directly without AI rewriting the choices', async () => {
+  const f=await fixture();
+  try {
+    f.state.reminders=[savedReminder('Livro da Cibele'),savedReminder('Livro da biblioteca')];
+    let calls=0;
+    const a=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{} as any,
+      async(_url,init)=>{
+        calls++;
+        const body=JSON.parse(String(init?.body));
+        assert(body.tools.some((t:any)=>t.name==='reminder_choices'));
+        return new Response(JSON.stringify({output:[{type:'function_call',name:'reminder_choices',call_id:'pick',arguments:JSON.stringify({purpose:'delete',search:'Livro'})}]}));
+      },undefined,f.n);
+    const [reply]=await a.handle({id:'natural',sender,text:'Queria tirar aquele aviso do livro, mas tenho mais de um',timestamp:Date.now()/1000});
+    assert.match(reply.text,/Qual lembrete deseja excluir/);
+    assert.match(reply.text,/2\. Livro da biblioteca/);
+    assert.equal(calls,1);
+    assert.equal(f.state.writes.length,0);
+  } finally {await f.store.close();}
+});
 test('guided reminder options and quiet settings require owner buttons, valid minutes and final confirmation',async()=>{
   const f=await fixture();
   try {

@@ -21,6 +21,7 @@ import { ReminderRunner } from './reminder-runner.js';
 import { NotificationDialogs, type ReminderDraft, type QuietDraft } from './notification-dialogs.js';
 import { quietHoursLabel, quietUntil } from './quiet-hours.js';
 import { reminderTime } from './reminder-format.js';
+import { ReminderSelection, type ReminderReference } from './reminder-selection.js';
 
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const notificationChange = z
@@ -82,6 +83,7 @@ export class Notifications {
   readonly queue: ReminderQueue;
   readonly dialogs: NotificationDialogs;
   readonly reminders: ReminderRunner;
+  readonly selection: ReminderSelection;
   private ticking = false;
   constructor(
     readonly config: Config,
@@ -95,6 +97,8 @@ export class Notifications {
     this.queue = new ReminderQueue(store);
     this.dialogs = new NotificationDialogs(this.db,this.queue,config.timeZone,(sender,data,text)=>this.draft(sender,data,text));
     this.reminders = new ReminderRunner(this.queue,this.db,day,transport,(s,error,now)=>this.db.problem(s,dayProblem(error),now));
+    this.selection = new ReminderSelection(this.db,day,(sender,id,reference)=>this.prepareReminder(sender,
+      {operation:'delete',id,title:null,schedule:null},new Set([id]),reference));
   }
   private async accounts(sender: string, sources: Preferences['sources'], cashWorkspace?: Preferences['cashWorkspace']) {
     const accounts: Record<string, string> = {};
@@ -223,7 +227,9 @@ export class Notifications {
         : 'Lembretes com botão Concluído: envio aguardando configuração/aprovação do modelo no WhatsApp; os lembretes sem confirmação usam outro modelo.';
     } catch {return 'Lembretes com botão Concluído: não foi possível verificar a disponibilidade do modelo no WhatsApp agora.';}
   }
-  async command(sender: string, command: string, button?: string): Promise<Reply | null> {
+  async command(sender: string, command: string, button?: string, originalText = command): Promise<Reply | null> {
+    const selected = await this.selection.command(sender,command,button,originalText);
+    if (selected) return selected;
     const completion=/^hub:done:([A-Za-z0-9_-]{43})$/.exec(button||'');
     if(completion) return this.reminders.acknowledge(sender,completion[1]);
     const decision = /^hub:notify:(confirm|cancel):([A-Za-z0-9_-]{43})$/.exec(button || '');
@@ -322,12 +328,14 @@ export class Notifications {
       `Assinar ${names[a.kind]} pelo WhatsApp?\n${a.kind === 'daily_summary' ? `Todos os dias às ${data.time}, fuso ${data.timeZone}.\nFontes: ${data.sources.join(', ')}.${cashWorkspace ? `\nCash: ${cashWorkspace.name}. Esta área de trabalho fica fixa no resumo, mesmo após trocar a área da conversa.` : ''}\nO resumo consulta a agenda principal do Calendar e dados sincronizados.` : 'Receber todos os seus lembretes ativos e sincronizados do Day, nos horários definidos em cada lembrete.'}\n\nOs avisos poderão chegar sem uma mensagem sua antes. Você pode pausar a qualquer momento com “parar notificações”.\n\nConfirme pelo botão para ativar.`,
     );
   }
-  async prepareReminder(sender: string, input: unknown, seen: Set<string>): Promise<Reply> {
+  async prepareReminder(sender: string, input: unknown, seen: Set<string>, reference?: ReminderReference): Promise<Reply> {
     const parsed = reminderChange.safeParse(input);
     if (!parsed.success) throw new PublicError('Horário ou recorrência inválidos. Peça ao usuário para confirmar os horários no formato HH:MM, de 00:00 a 23:59. Não corrija nem crie o lembrete por suposição.');
     const a = parsed.data;
     await this.day.requireReminders(sender);
     const account = (await this.accounts(sender, ['day'])).day;
+    if (reference && account !== reference.account)
+      throw new PublicError('A conta do Day mudou. Envie “remover lembrete” para consultar a nova lista.');
     let doc: any,
       revision = 0,
       id = a.id || randomUUID();
@@ -340,7 +348,9 @@ export class Notifications {
       if (!a.id || !seen.has(a.id))
         throw new PublicError('Consulte a lista de lembretes nesta solicitação antes de alterar um deles.');
       const r = (await this.day.reminders(sender, a.id)).items[0];
-      if (!r) throw new PublicError('Lembrete não encontrado.');
+      if (!r || r.deleted) throw new PublicError('Lembrete não encontrado. Consulte “meus lembretes” novamente.');
+      if (reference && r.revision !== reference.revision)
+        throw new PublicError('O lembrete mudou desde a listagem. Envie “remover lembrete” para revisar a versão atual.');
       revision = r.revision;
       doc = {
         title: r.title,

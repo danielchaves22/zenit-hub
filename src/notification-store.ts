@@ -130,12 +130,12 @@ export class NotificationStore {
     });
     return token;
   }
-  async pending<T>(sender: string): Promise<{hash:string;data:T}|null> {
-    const {rows}=await this.store.db.query("SELECT hash,data FROM notification_drafts WHERE sender=$1 AND state='pending' AND expires>$2 ORDER BY expires DESC LIMIT 1",[sender,Date.now()]);
-    return rows[0]?{hash:rows[0].hash,data:this.store.vault.open<T>(rows[0].data,`notification-draft:${rows[0].hash}:${sender}`)}:null;
+  async pending<T>(sender: string, includeExpired = false): Promise<{hash:string;data:T;expires:number}|null> {
+    const {rows}=await this.store.db.query("SELECT hash,data,expires FROM notification_drafts WHERE sender=$1 AND state='pending' AND ($3::boolean OR expires>$2) ORDER BY expires DESC LIMIT 1",[sender,Date.now(),includeExpired]);
+    return rows[0]?{hash:rows[0].hash,expires:Number(rows[0].expires),data:this.store.vault.open<T>(rows[0].data,`notification-draft:${rows[0].hash}:${sender}`)}:null;
   }
-  async cancelPending(sender: string,hash: string) {
-    const result=await this.store.db.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND hash=$2 AND state='pending' AND expires>$3",[sender,hash,Date.now()]);
+  async cancelPending(sender: string,hash: string, includeExpired = false) {
+    const result=await this.store.db.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND hash=$2 AND state='pending' AND ($4::boolean OR expires>$3)",[sender,hash,Date.now(),includeExpired]);
     return result.rowCount===1;
   }
   async claim<T>(sender: string, token: string, approved: boolean): Promise<T | null> {
