@@ -170,6 +170,8 @@ test('confirmation repeats at the chosen interval, survives reinitialization and
     await f.n.queue.remember(s,{id,revision:1,title:'Livro',timeZone:config.timeZone,dueAt:new Date(now).toISOString()},now);
     await f.n.reminders.tick(now);
     assert.equal(f.state.sent.length,1);
+    assert.equal(f.state.sent[0][2][0], 'Livro');
+    assert.match(f.state.sent[0][2][1], /^Hoje às \d{2}h\d{2}$/);
     const payload=f.state.sent[0][3];
     assert.match(payload,/^hub:done:/);
     await f.connect(); // Same account reauthorization must preserve this pending occurrence.
@@ -350,6 +352,9 @@ test('repeated polling sends occurrence once; receipt state never claims deliver
     await f.n.tick(now);
     await f.n.tick(now + 1000);
     assert.equal(f.state.sent.length, 1);
+    assert.equal(f.state.sent[0][2][0], 'Beber água');
+    assert.match(f.state.sent[0][2][1], /^Hoje às \d{2}h\d{2}$/);
+    assert.equal(f.state.sent[0][3], undefined);
     assert.equal((await f.n.db.history(sender))[0].state, 'accepted');
     await f.n.db.receipt('wamid.1', 'delivered');
     await f.n.db.receipt('wamid.1', 'read');

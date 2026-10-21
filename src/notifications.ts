@@ -20,6 +20,7 @@ import { ReminderQueue } from './reminder-queue.js';
 import { ReminderRunner } from './reminder-runner.js';
 import { NotificationDialogs, type ReminderDraft, type QuietDraft } from './notification-dialogs.js';
 import { quietHoursLabel, quietUntil } from './quiet-hours.js';
+import { reminderTime } from './reminder-format.js';
 
 const clock = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
 export const notificationChange = z
@@ -527,7 +528,7 @@ export class Notifications {
           await this.db.mark(d.id,'skipped','moved_to_reminder_queue');
           return;
         }
-        values = [plain(r.title), `${display(d.due, d.data.timeZone!)} (${d.data.timeZone})`];
+        values = [plain(r.title), reminderTime(d.due, d.data.timeZone!, Math.max(now, Date.now()))];
       } else values = await this.summary(s, d.data.date!);
       // Authorization and age are checked again after the read requests.
       const latest = await this.db.subscription(d.sender, d.kind);

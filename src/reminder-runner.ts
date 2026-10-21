@@ -4,6 +4,7 @@ import type { NotificationStore, Subscription } from "./notification-store.js";
 import { ReminderQueue, type Occurrence } from "./reminder-queue.js";
 import { quietUntil } from "./quiet-hours.js";
 import type { Reply } from "./types.js";
+import { reminderTime } from "./reminder-format.js";
 
 export class ReminderRunner {
   constructor(
@@ -177,16 +178,11 @@ export class ReminderRunner {
           validUntil,
         );
         if (!id) continue;
-        const time = new Intl.DateTimeFormat("pt-BR", {
-          timeZone: o.data.timeZone,
-          dateStyle: "short",
-          timeStyle: "short",
-        }).format(o.due);
         try {
           const metaId = await this.transport.send(
             o.sender,
             "day_reminders",
-            [String(r.title), `${time} (${o.data.timeZone})`],
+            [String(r.title), reminderTime(o.due, o.data.timeZone, sendAt)],
             repeat ? `hub:done:${o.data.token}` : undefined,
           );
           await this.db.mark(id, "accepted", null, metaId);
