@@ -18,6 +18,7 @@ import {
 import { NotificationTransport } from './notification-transport.js';
 import { ReminderQueue } from './reminder-queue.js';
 import { ReminderRunner } from './reminder-runner.js';
+import { ReminderSnooze } from './reminder-snooze.js';
 import { NotificationDialogs, type ReminderDraft, type QuietDraft } from './notification-dialogs.js';
 import { quietHoursLabel, quietUntil } from './quiet-hours.js';
 import { reminderTime } from './reminder-format.js';
@@ -83,6 +84,7 @@ export class Notifications {
   readonly queue: ReminderQueue;
   readonly dialogs: NotificationDialogs;
   readonly reminders: ReminderRunner;
+  readonly snooze: ReminderSnooze;
   readonly selection: ReminderSelection;
   private ticking = false;
   constructor(
@@ -97,6 +99,7 @@ export class Notifications {
     this.queue = new ReminderQueue(store);
     this.dialogs = new NotificationDialogs(this.db,this.queue,config.timeZone,(sender,data,text)=>this.draft(sender,data,text));
     this.reminders = new ReminderRunner(this.queue,this.db,day,transport,(s,error,now)=>this.db.problem(s,dayProblem(error),now));
+    this.snooze = new ReminderSnooze(this.queue,this.db,day,(s,error,now)=>this.db.problem(s,dayProblem(error),now));
     this.selection = new ReminderSelection(this.db,day,(sender,operation,id,reference)=>this.prepareReminder(sender,
       {operation,id,title:null,schedule:null},new Set([id]),reference));
   }
@@ -181,7 +184,7 @@ export class Notifications {
     const list = await this.db.list(sender),
       history = await this.db.history(sender);
     const queue = await this.queue.status(sender);
-    const quiet = `\n\nPeríodo de silêncio: ${quietHoursLabel(await this.queue.settings(sender))}. Envie “configurar silêncio” para alterá-lo.\nLembretes na fila: ${queue.pending}; aguardando o fim do silêncio: ${queue.quiet}; com confirmação pendente: ${queue.awaiting}; conclusões aguardando sincronização: ${queue.syncing}. O estado de entrega consta abaixo.\n${await this.confirmationAvailability()}`;
+    const quiet = `\n\nPeríodo de silêncio: ${quietHoursLabel(await this.queue.settings(sender))}. Envie “configurar silêncio” para alterá-lo.\nLembretes na fila: ${queue.pending}; aguardando o fim do silêncio: ${queue.quiet}; adiados: ${queue.snoozed}; com confirmação pendente: ${queue.awaiting}; conclusões aguardando sincronização: ${queue.syncing}. O estado de entrega consta abaixo.\n${await this.confirmationAvailability()}`;
     const states: Record<string, string> = {
       accepted: 'aceito pelo WhatsApp',
       delivered: 'entregue',
@@ -222,12 +225,16 @@ export class Notifications {
   }
   private async confirmationAvailability() {
     try {
+      if (typeof this.transport.snoozeApproved === 'function' && await this.transport.snoozeApproved())
+        return 'Lembretes com botões Concluído e Adiar: modelo aprovado no WhatsApp. Adiar pergunta os minutos e pausa somente a ocorrência atual.';
       return await this.transport.approved('day_reminders',false,true)
-        ? 'Lembretes com botão Concluído: modelo aprovado no WhatsApp.'
+        ? 'Lembretes com botão Concluído: modelo aprovado no WhatsApp. O botão Adiar aguarda configuração/aprovação do novo modelo.'
         : 'Lembretes com botão Concluído: envio aguardando configuração/aprovação do modelo no WhatsApp; os lembretes sem confirmação usam outro modelo.';
     } catch {return 'Lembretes com botão Concluído: não foi possível verificar a disponibilidade do modelo no WhatsApp agora.';}
   }
   async command(sender: string, command: string, button?: string, originalText = command): Promise<Reply | null> {
+    const snoozed = await this.snooze.command(sender,command,button);
+    if (snoozed) return snoozed;
     const selected = await this.selection.command(sender,command,button,originalText);
     if (selected) return selected;
     const completion=/^hub:done:([A-Za-z0-9_-]{43})$/.exec(button||'');

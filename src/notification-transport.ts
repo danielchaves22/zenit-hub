@@ -5,7 +5,7 @@ import { PublicError } from './types.js';
 import type { NotificationKind } from './notification-store.js';
 
 export class NotificationTransport {
-  private cache = new Map<string, { at: number; approved: boolean }>();
+  private cache = new Map<string, { at: number; approved: boolean; snooze: boolean }>();
   constructor(
     readonly config: Config,
     private fetcher: Fetch = fetch,
@@ -17,25 +17,34 @@ export class NotificationTransport {
       : this.config.notifications.reminderTemplate;
   }
   async approved(kind: NotificationKind, refresh = false, confirmation = false) {
-    const name = this.name(kind, confirmation),
-      id = this.config.notifications.wabaId;
-    if (!name || !id || !this.config.meta.token || !this.config.meta.phoneId) return false;
+    if (kind === 'day_reminders' && confirmation && await this.snoozeApproved(refresh)) return true;
+    return (await this.inspect(this.name(kind,confirmation),refresh)).approved;
+  }
+  async snoozeApproved(refresh = false) {
+    return (await this.inspect(this.config.notifications.snoozeTemplate,refresh)).snooze;
+  }
+  private async inspect(name: string, refresh: boolean) {
+    const id = this.config.notifications.wabaId;
+    if (!name || !id || !this.config.meta.token || !this.config.meta.phoneId) return { at: Date.now(), approved: false, snooze: false };
     const cached = this.cache.get(name);
-    if (!refresh && cached && Date.now() - cached.at < 60_000) return cached.approved;
-    const p = new URLSearchParams({ name, fields: 'name,status,language', limit: '100' });
+    if (!refresh && cached && Date.now() - cached.at < 60_000) return cached;
+    const p = new URLSearchParams({ name, fields: 'name,status,language,category,components', limit: '100' });
     const result = await jsonRequest(
       this.fetcher,
       `https://graph.facebook.com/${this.config.meta.version}/${id}/message_templates?${p}`,
       { headers: { Authorization: `Bearer ${this.config.meta.token}` } },
       10_000,
     );
-    const approved =
-      result.data?.some(
+    const template =
+      result.data?.find(
         (t: any) =>
           t.name === name && t.language === this.config.notifications.language && t.status === 'APPROVED',
-      ) === true;
-    this.cache.set(name, { at: Date.now(), approved });
-    return approved;
+      );
+    const buttons = template?.components?.find((c: any) => c.type === 'BUTTONS')?.buttons;
+    const entry = { at: Date.now(), approved: Boolean(template), snooze: template?.category === 'UTILITY' && Array.isArray(buttons) && buttons.length === 2 &&
+      buttons[0].type === 'QUICK_REPLY' && buttons[0].text === 'Concluído' && buttons[1].type === 'QUICK_REPLY' && buttons[1].text === 'Adiar' };
+    this.cache.set(name, entry);
+    return entry;
   }
   async require(kind: NotificationKind, confirmation = false) {
     if (!(await this.approved(kind, false, confirmation)))
@@ -46,6 +55,7 @@ export class NotificationTransport {
   async send(sender: string, kind: NotificationKind, values: string[], completionButton?: string) {
     if(completionButton && (kind!=='day_reminders'||!/^hub:done:[A-Za-z0-9_-]{43}$/.test(completionButton))) throw new Error('Invalid reminder button');
     if (values.length !== (kind === 'daily_summary' ? 4 : 2)) throw new Error('Invalid template parameters');
+    const snooze = Boolean(completionButton) && await this.snoozeApproved();
     const result = await jsonRequest(
       this.fetcher,
       `https://graph.facebook.com/${this.config.meta.version}/${this.config.meta.phoneId}/messages`,
@@ -57,7 +67,7 @@ export class NotificationTransport {
           to: sender,
           type: 'template',
           template: {
-            name: this.name(kind, Boolean(completionButton)),
+            name: snooze ? this.config.notifications.snoozeTemplate : this.name(kind, Boolean(completionButton)),
             language: { code: this.config.notifications.language },
             components: [
               {
@@ -65,6 +75,7 @@ export class NotificationTransport {
                 parameters: values.map((text) => ({ type: 'text', text: text.replace(/\s+/g, ' ').trim() })),
               },
               ...(completionButton?[{type:'button',sub_type:'quick_reply',index:'0',parameters:[{type:'payload',payload:completionButton}]}]:[]),
+              ...(snooze?[{type:'button',sub_type:'quick_reply',index:'1',parameters:[{type:'payload',payload:completionButton!.replace('hub:done:','hub:snooze:')}]}]:[]),
             ],
           },
         }),

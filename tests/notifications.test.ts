@@ -135,6 +135,169 @@ const savedReminder = (title: string, overrides: Record<string, unknown> = {}) =
   schedule, requires_confirmation: false, repeat_minutes: 5, respect_quiet_hours: true, ...overrides,
 });
 
+async function deliveredReminder(f: Awaited<ReturnType<typeof fixture>>, now: number, overrides: Record<string, unknown> = {}) {
+  const s = (await f.n.db.subscription(sender,'day_reminders')) ?? await f.subscribe();
+  const r = savedReminder('Livro', {requires_confirmation:true,...overrides});
+  f.state.reminders.push(r);
+  await f.n.queue.remember(s,{id:r.id,revision:r.revision,title:r.title,timeZone:config.timeZone,dueAt:new Date(now).toISOString()},now);
+  await f.n.reminders.tick(now);
+  const done = f.state.sent.find(v => v[2][0] === r.title)?.[3] as string;
+  assert(done, 'fixture reminder must be delivered with confirmation');
+  return {r,done,button:done.replace('hub:done:','hub:snooze:'),token:done.slice('hub:done:'.length)};
+}
+
+test('snooze persists across restart, affects one occurrence and resumes its normal interval without a Day write',async t=>{
+  const f=await fixture();
+  try {
+    let now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    const b=await deliveredReminder(f,now,{title:'Outro lembrete'});
+    const initial=(await f.n.queue.byToken(sender,a.token))!;
+    assert.match((await f.n.command(sender,'',a.button))!.text,/Por quantos minutos/);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.next_send,initial.next_send);
+    const restarted=new Notifications(config,f.store,f.day as any,f.cash as any,{} as any,f.n.transport);
+    now+=60_000;
+    const accepted=now;
+    assert.match((await restarted.command(sender,'20 minutos'))!.text,/Adiado por 20 minutos/);
+    const saved=(await restarted.queue.byToken(sender,a.token))!;
+    assert.equal(saved.next_send,accepted+20*60_000);
+    assert.equal(saved.snoozed_until,saved.next_send);
+    assert.equal(saved.state,'pending');
+    assert.equal((await restarted.queue.status(sender)).snoozed,1);
+    assert.equal(f.state.writes.length,0); assert.equal(f.state.completed.size,0);
+    // A stale worker snapshot may not send early; retry deferrals preserve snooze.
+    assert.equal(await restarted.queue.claim(initial,accepted+5*60_000,5,saved.valid_until),null);
+    await restarted.queue.defer(saved,accepted+60_000);
+    assert.equal((await restarted.queue.byToken(sender,a.token))!.next_send,saved.next_send);
+    // Reauthorizing the same account preserves an accepted snooze.
+    await f.connect();
+    now=accepted+20*60_000-1; await restarted.reminders.tick(now);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,1);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Outro lembrete').length,2);
+    now++; await restarted.reminders.tick(now);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,2);
+    const resumed=(await restarted.queue.byToken(sender,a.token))!;
+    assert.equal(resumed.snoozed_until,0); assert.equal(resumed.next_send,now+5*60_000);
+    now+=5*60_000; await restarted.reminders.tick(now);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,3);
+    assert.equal((await restarted.queue.byToken(sender,b.token))!.state,'pending');
+  } finally {await f.store.close();}
+});
+
+test('snooze dialog validates minutes, cancels and expires without changing the next notification',async t=>{
+  const f=await fixture();
+  try {
+    let now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    const before=(await f.n.queue.byToken(sender,a.token))!.next_send;
+    const question=(await f.n.command(sender,'',a.button))!;
+    for(const value of ['0','-1','1.5','1,5','10081','999999999999999999'])
+      assert.match((await f.n.command(sender,value))!.text,/número inteiro/);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.next_send,before);
+    assert.match((await f.n.command(sender,'',question.buttons![0].id))!.text,/cancelado/);
+    assert.equal(await f.n.snooze.command(sender,'20'),null);
+    await f.n.command(sender,'',a.button);
+    now+=600_001;
+    assert.match((await f.n.command(sender,'20'))!.text,/expirou/);
+    await f.n.command(sender,'',a.button);
+    assert.equal(await f.n.snooze.command(sender,'meus lembretes'),null);
+    assert.equal(await f.n.snooze.command(sender,'20'),null);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.next_send,before);
+  } finally {await f.store.close();}
+});
+
+test('snooze respects quiet hours and reminder exceptions; changing silence cannot shorten the accepted pause',async t=>{
+  const f=await fixture();
+  try {
+    let now=Date.parse('2026-11-01T21:50:00-03:00'); t.mock.method(Date,'now',()=>now);
+    await f.n.queue.saveSettings(sender,{enabled:true,start:'22:00',end:'07:00',timeZone:config.timeZone});
+    const a=await deliveredReminder(f,now);
+    const b=await deliveredReminder(f,now,{title:'Exceção',respect_quiet_hours:false});
+    await f.n.command(sender,'',a.button);
+    assert.match((await f.n.command(sender,'30'))!.text,/após o período de silêncio/);
+    let saved=(await f.n.queue.byToken(sender,a.token))!;
+    assert.equal(saved.next_send,Date.parse('2026-11-02T07:00:00-03:00'));
+    assert.equal(saved.snoozed_until,now+30*60_000);
+    await f.n.command(sender,'',b.button); await f.n.command(sender,'30');
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.next_send,now+30*60_000);
+    // Removing silence makes the quiet reminder eligible only after the snooze.
+    await f.n.queue.saveSettings(sender,{enabled:false,start:'22:00',end:'07:00',timeZone:config.timeZone});
+    saved=(await f.n.queue.byToken(sender,a.token))!;
+    assert.equal(saved.next_send,saved.snoozed_until);
+    await f.n.queue.saveSettings(sender,{enabled:true,start:'22:00',end:'07:00',timeZone:config.timeZone});
+    now+=30*60_000; await f.n.reminders.tick(now);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,1);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Exceção').length,2);
+    now=Date.parse('2026-11-02T07:00:00-03:00'); await f.n.reminders.tick(now);
+    assert.equal(f.state.sent.filter(v=>v[2][0]==='Livro').length,2);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.next_send,now+5*60_000);
+  } finally {await f.store.close();}
+});
+
+test('snooze rejects other users, superseded occurrences and Day edits between the button and the answer',async t=>{
+  const f=await fixture();
+  try {
+    let now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    await assert.rejects(f.n.command('bob','',a.button),/vigente/);
+    await f.n.command(sender,'',a.button);
+    a.r.revision++;
+    await assert.rejects(f.n.command(sender,'20'),/vigente/);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.snoozed_until,0);
+    a.r.revision--;
+    await f.n.command(sender,'',a.button);
+    const s=(await f.n.db.subscription(sender,'day_reminders'))!;
+    now+=60_000;
+    await f.n.queue.remember(s,{id:a.r.id,revision:1,title:a.r.title,timeZone:config.timeZone,dueAt:new Date(now).toISOString()},now);
+    await assert.rejects(f.n.command(sender,'20'),/vigente/);
+    await assert.rejects(f.n.command(sender,'',a.button),/vigente/);
+    await f.n.reminders.tick(now);
+    assert.equal(f.state.sent.length,2); assert.equal(f.state.completed.size,0);
+    const latest=f.state.sent[1][3].replace('hub:done:','hub:snooze:');
+    await f.n.command(sender,'',latest);
+    await f.n.db.pause(sender,'day_reminders');
+    await assert.rejects(f.n.command(sender,'',latest),/vigente/);
+    assert.equal(await f.n.snooze.command(sender,'20'),null);
+  } finally {await f.store.close();}
+});
+
+test('completion while snoozed stops delivery, even while Day is offline',async t=>{
+  const f=await fixture();
+  try {
+    let now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    await f.n.command(sender,'',a.button); await f.n.command(sender,'20');
+    f.state.completionError=new Error('offline');
+    assert.match((await f.n.command(sender,'',a.done))!.text,/interrompidas/);
+    const saved=(await f.n.queue.byToken(sender,a.token))!;
+    assert.equal(saved.state,'completed'); assert.equal(saved.next_send,now+60_000);
+    now+=60_000; f.state.completionError=null; await f.n.reminders.tick(now);
+    assert.equal(f.state.completed.size,1);
+    now+=30*60_000; await f.n.reminders.tick(now);
+    assert.equal(f.state.sent.length,1);
+    await assert.rejects(f.n.command(sender,'',a.button),/vigente/);
+  } finally {await f.store.close();}
+});
+
+test('snooze is consumed once and a later occurrence retains its original schedule',async t=>{
+  const f=await fixture();
+  try {
+    let now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now,{validUntil:new Date(now+10*60_000).toISOString()});
+    await f.n.command(sender,'',a.button);
+    const replies=await Promise.all([f.n.snooze.command(sender,'20'),f.n.snooze.command(sender,'20')]);
+    assert.equal(replies.filter(r=>r?.text.startsWith('Adiado por')).length,1);
+    assert.match(replies.find(r=>r?.text.startsWith('Adiado por'))!.text,/termina antes desse prazo/);
+    now+=10*60_000;
+    f.state.reminders[0].validUntil=new Date(now+86400_000).toISOString();
+    await f.n.queue.remember((await f.n.db.subscription(sender,'day_reminders'))!,{id:a.r.id,revision:1,title:a.r.title,timeZone:config.timeZone,dueAt:new Date(now).toISOString()},now);
+    await f.n.reminders.tick(now);
+    assert.equal(f.state.sent.length,2); assert.equal(f.state.completed.size,0);
+    const latest=await f.n.queue.byToken(sender,f.state.sent[1][3].slice('hub:done:'.length));
+    assert.equal(latest!.snoozed_until,0); assert.equal(latest!.next_send,now+5*60_000);
+  } finally {await f.store.close();}
+});
+
 test('numbered deletion uses the displayed snapshot, survives restart and still requires the owner confirmation', async () => {
   const f = await fixture();
   try {
@@ -528,6 +691,74 @@ test('confirmation template sends a user-bound opaque quick reply and uses the a
   const body=JSON.parse(calls.at(-1).init.body);
   assert.equal(body.template.name,config.notifications.confirmationTemplate);
   assert.deepEqual(body.template.components[1],{type:'button',sub_type:'quick_reply',index:'0',parameters:[{type:'payload',payload}]});
+});
+
+test('snooze button uses a separately approved two-button template and safely falls back to the existing model',async()=>{
+  const c={...config,notifications:{...config.notifications,snoozeTemplate:'zenit_lembrete_confirmar_v4'}};
+  const done='hub:done:'+randomBytes(32).toString('base64url');
+  const buttons=[{type:'QUICK_REPLY',text:'Concluído'},{type:'QUICK_REPLY',text:'Adiar'}];
+  for(const variant of ['approved','pending','missing','reversed','marketing','unknown-category']) {
+    const sent:any[]=[];
+    const transport=new NotificationTransport(c,async(url,init)=>{
+      if(String(url).includes('message_templates')) {
+        const name=new URL(String(url)).searchParams.get('name');
+        assert(new URL(String(url)).searchParams.get('fields')!.split(',').includes('category'));
+        return new Response(JSON.stringify({data:[{name,language:'pt_BR',
+          category:variant==='marketing'?'MARKETING':variant==='unknown-category'?undefined:'UTILITY',
+          status:name===c.notifications.snoozeTemplate&&variant==='pending'?'PENDING':'APPROVED',
+          components:[{type:'BUTTONS',buttons:variant==='missing'?buttons.slice(0,1):variant==='reversed'?[...buttons].reverse():buttons}]}]}));
+      }
+      sent.push(JSON.parse(init!.body as string));
+      return new Response(JSON.stringify({messages:[{id:'wamid.snooze'}]}));
+    });
+    assert.equal(await transport.approved('day_reminders',false,true),true);
+    await transport.send(sender,'day_reminders',['Livro','Hoje às 06h30'],done);
+    const message=sent[0].template;
+    assert.equal(message.name,variant==='approved'?c.notifications.snoozeTemplate:c.notifications.confirmationTemplate);
+    assert.equal(message.components[1].parameters[0].payload,done);
+    assert.equal(message.components.length,variant==='approved'?3:2);
+    if(variant==='approved') assert.deepEqual(message.components[2],{type:'button',sub_type:'quick_reply',index:'1',parameters:[{type:'payload',payload:done.replace('hub:done:','hub:snooze:')}]});
+    await transport.send(sender,'day_reminders',['Livro','Hoje às 06h30']);
+    assert.equal(sent[1].template.components.length,1);
+    assert.equal(sent[1].template.name,c.notifications.reminderTemplate);
+  }
+});
+
+test('snooze uses WhatsApp button and numeric reply without calling the AI',async t=>{
+  const f=await fixture();
+  try {
+    const now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    const assistant=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{} as any,
+      async()=>{throw new Error('AI must not run');},undefined,f.n);
+    let replies=await assistant.handle({id:'snooze-button',sender,text:'Adiar',button:a.button,timestamp:now/1000});
+    assert.match(replies[0].text,/Por quantos minutos/);
+    replies=await assistant.handle({id:'snooze-answer',sender,text:'20 minutos',timestamp:now/1000});
+    assert.match(replies[0].text,/Adiado por 20 minutos/);
+    assert.equal(f.state.writes.length,0); assert.equal(f.state.completed.size,0);
+    const raw=JSON.stringify((await f.store.db.query('SELECT data FROM notification_drafts')).rows);
+    assert(!raw.includes(a.token));
+  } finally {await f.store.close();}
+});
+
+test('snooze does not silently apply while access is unavailable or on a non-confirmable occurrence',async t=>{
+  const f=await fixture();
+  try {
+    const now=Date.now()+1000; t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    await f.n.command(sender,'',a.button);
+    f.state.pollError=new Error('offline');
+    await assert.rejects(f.n.command(sender,'20'),/adiamento não foi aplicado/);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.snoozed_until,0);
+    f.state.pollError=null;
+    a.r.requires_confirmation=false;
+    await assert.rejects(f.n.command(sender,'',a.button),/vigente/);
+    a.r.requires_confirmation=true;
+    await f.n.command(sender,'',a.button);
+    await f.connect('another-day-account');
+    await assert.rejects(f.n.command(sender,'',a.button),/vigente/);
+    assert.equal(await f.n.snooze.command(sender,'20'),null);
+  } finally {await f.store.close();}
 });
 test('screenshot question returns real catalog without AI, even with old Calendar-only history', async () => {
   const f = await fixture();

@@ -54,5 +54,44 @@
       "type": "BUTTONS",
       "buttons": [{ "type": "QUICK_REPLY", "text": "Concluído" }]
     }]
+  },
+  {
+    "name": "zenit_lembrete_day_v3",
+    "language": "pt_BR",
+    "category": "UTILITY",
+    "components": [{
+      "type": "BODY",
+      "text": "Lembrete\n*{{1}}*\n{{2}} — conforme o horário programado por você.",
+      "example": { "body_text": [["Separar o livro para devolver na escola", "Hoje às 06h30"]] }
+    }]
+  },
+  {
+    "name": "zenit_lembrete_confirmar_v3",
+    "language": "pt_BR",
+    "category": "UTILITY",
+    "components": [{
+      "type": "BODY",
+      "text": "Lembrete\n*{{1}}*\n{{2}} — conforme o horário programado por você.",
+      "example": { "body_text": [["Separar o livro para devolver na escola", "Hoje às 06h30"]] }
+    }, {
+      "type": "BUTTONS",
+      "buttons": [{ "type": "QUICK_REPLY", "text": "Concluído" }]
+    }]
+  },
+  {
+    "name": "zenit_lembrete_confirmar_v4",
+    "language": "pt_BR",
+    "category": "UTILITY",
+    "components": [{
+      "type": "BODY",
+      "text": "Lembrete\n*{{1}}*\n{{2}} — conforme o horário programado por você.",
+      "example": { "body_text": [["Separar o livro para devolver na escola", "Hoje às 06h30"]] }
+    }, {
+      "type": "BUTTONS",
+      "buttons": [
+        { "type": "QUICK_REPLY", "text": "Concluído" },
+        { "type": "QUICK_REPLY", "text": "Adiar" }
+      ]
+    }]
   }
 ]

@@ -30,11 +30,15 @@ Comandos de conexão, workspaces e catálogo de notificações têm tratamento p
 
 Consultas de gastos realizados recebem totais calculados no Cash; a IA não precisa somar lançamentos paginados. Período, categorias e origem fixa são filtros explícitos. Escritas financeiras seguem o rascunho e o botão atual do Cash. Calendar e gestão de lembretes têm prévias próprias; texto/voz não substituem os botões de confirmação de operações.
 
+Pedidos incompletos de eventos usam `calendar_prepare` para guardar os campos já informados e perguntar somente o próximo campo. `calendar_complete` recebe o ID do pedido vigente e complementa seus campos; por exemplo, um início às 12h30 e a resposta posterior “às 15h30” formam uma única prévia. Horários novos precisam estar na mensagem atual, com equivalência entre `12h30` e `12:30`; o texto do assistente e horários de outros pedidos não servem como evidência. Os campos anteriores são preservados pelo servidor, sem exigir uma mensagem única com ambos os horários.
+
+Esses pedidos ficam cifrados em `calendar_intents`, separados das prévias confirmáveis de `calendar_drafts`, por até 30 minutos sem atualização. São vinculados à pessoa, ao contexto da conversa e à autorização do Calendar. Cancelamento, reconexão, novo pedido ou troca de contexto invalidam o pedido anterior. Uma falha ao preparar a prévia mantém os dados para nova tentativa explícita, sem gravar eventos. Validação interna é identificada como falha do Hub; rejeições do Google só são informadas quando retornadas pelo conector. A gravação continua dependendo do botão final.
+
 ## Persistência e execução
 
 PostgreSQL guarda conexões, vínculos temporários, filas, histórico curto, rascunhos e estado de notificações. Credenciais e conteúdo sensível usam AES-256-GCM. Não há cópia integral das bases financeiras, dos assuntos ou da agenda. A chave HUB_ENCRYPTION_KEY deve permanecer recuperável junto ao backup do banco.
 
-As migrações SQL são controladas pelo próprio projeto em [src/migrations.ts](../src/migrations.ts), com registro em hub_schema_migrations; o Hub não usa Prisma. A sequência atual inclui base operacional (1), calendar_drafts (2) e notificações (3). npm run db:migrate aplica as versões; a inicialização apenas verifica a compatibilidade. A primeira migração recusa schema já ocupado.
+As migrações SQL são controladas pelo próprio projeto em [src/migrations.ts](../src/migrations.ts), com registro em hub_schema_migrations; o Hub não usa Prisma. A versão atual é 9, que acrescenta `snoozed_until` às ocorrências de lembretes para adiar um aviso sem alterar sua regra no Day. A versão 8 acrescentou `calendar_intents` para os pedidos incompletos de eventos. `npm run db:migrate` aplica as versões; a inicialização apenas verifica a compatibilidade. A primeira migração recusa schema já ocupado.
 
 O webhook valida assinatura/destino e persiste antes de responder 202. Um worker serial usa bloqueio de sessão PostgreSQL para evitar concorrência entre processos durante deploys. A entrega de notificações usa esse mesmo processo; não exige cron separado no Day ou no Render. IDs de mensagens e ocorrências impedem repetição. Operações com resultado incerto não são reenviadas automaticamente.
 

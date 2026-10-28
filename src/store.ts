@@ -83,7 +83,10 @@ export class Store {
     // Do not erase an access warning until an authenticated poll actually succeeds.
     if (sameAccount) await client.query('UPDATE notification_subscriptions SET next_check=LEAST(next_check,$2) WHERE sender=$1 AND enabled', [c.sender, Date.now()]);
     await client.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
-    if (c.provider === 'calendar') await client.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
+    if (c.provider === 'calendar') {
+      await client.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [c.sender]);
+      await client.query('DELETE FROM calendar_intents WHERE sender=$1', [c.sender]);
+    }
     return { sameAccount, paused };
   }
   private async pauseProviderSubscriptions(client: Pool | PoolClient, sender: string, provider: Provider) {
@@ -116,8 +119,36 @@ export class Store {
       await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
       await this.pauseProviderSubscriptions(tx, sender, provider);
       await tx.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
+      await tx.query('DELETE FROM calendar_intents WHERE sender=$1', [sender]);
       if (provider === 'calendar') await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
     });
+  }
+  async saveCalendarIntent(sender: string, data: { accountId: string; grantId?: string }, ttl = 30 * 60_000) {
+    const scope = this.historyScope(sender);
+    await transaction(this.db, async tx => {
+      const { rows } = await tx.query("SELECT data FROM connections WHERE sender=$1 AND provider='calendar' FOR UPDATE", [sender]);
+      const connection = rows[0] ? this.vault.open<Connection>(rows[0].data, `connection:${sender}:calendar`) : null;
+      if (!connection || connection.accountId !== data.accountId || connection.grantId !== data.grantId) throw new Error('Calendar connection changed');
+      // A new request also invalidates an older confirmation button.
+      await tx.query("UPDATE calendar_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
+      await tx.query(`INSERT INTO calendar_intents(sender,scope,data,expires) VALUES($1,$2,$3,$4)
+        ON CONFLICT(sender,scope) DO UPDATE SET data=EXCLUDED.data,expires=EXCLUDED.expires`,
+      [sender, scope, this.vault.seal(data, `calendar-intent:${sender}:${scope}`), Date.now() + ttl]);
+    });
+  }
+  async pendingCalendarIntent<T extends { accountId: string; grantId?: string }>(sender: string): Promise<T | null> {
+    const scope = this.historyScope(sender);
+    const { rows } = await this.db.query('SELECT data FROM calendar_intents WHERE sender=$1 AND scope=$2 AND expires>$3', [sender, scope, Date.now()]);
+    if (!rows[0]) return null;
+    const data = this.vault.open<T>(rows[0].data, `calendar-intent:${sender}:${scope}`);
+    const connection = await this.connection(sender, 'calendar');
+    if (!connection || data.accountId !== connection.accountId || data.grantId !== connection.grantId) {
+      await this.clearCalendarIntent(sender); return null;
+    }
+    return data;
+  }
+  async clearCalendarIntent(sender: string) {
+    await this.db.query('DELETE FROM calendar_intents WHERE sender=$1', [sender]);
   }
   async calendarDraft(sender: string, token: string, data: unknown) {
     const hash = digest(token);
@@ -176,6 +207,7 @@ export class Store {
       await tx.query(`INSERT INTO sender_state(sender,cash_disabled) VALUES($1,$2)
         ON CONFLICT(sender) DO UPDATE SET cash_disabled=EXCLUDED.cash_disabled`, [sender, disabled]);
       await tx.query('DELETE FROM history WHERE sender=$1', [sender]);
+      await tx.query('DELETE FROM calendar_intents WHERE sender=$1', [sender]);
       await tx.query("UPDATE notification_subscriptions SET enabled=false,revision=revision+1 WHERE sender=$1", [sender]);
       await tx.query("UPDATE notification_drafts SET state='cancelled' WHERE sender=$1 AND state='pending'", [sender]);
     });
@@ -271,6 +303,7 @@ export class Store {
       await tx.query('DELETE FROM oauth_links WHERE expires<$1', [Date.now()]);
       await tx.query('DELETE FROM guest_favorite_drafts WHERE expires<$1', [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM calendar_drafts WHERE expires<$1 AND state<>'executing'", [Date.now() - 30 * 86400_000]);
+      await tx.query('DELETE FROM calendar_intents WHERE expires<$1', [Date.now()]);
       await tx.query('DELETE FROM history WHERE created<$1', [Date.now() - 86400_000]);
       await tx.query("DELETE FROM inbox WHERE created<$1 AND state='done'", [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM outbox WHERE created<$1 AND state='sent'", [Date.now() - 30 * 86400_000]);

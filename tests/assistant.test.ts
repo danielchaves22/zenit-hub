@@ -26,10 +26,11 @@ test('existing Cash-only conversations require no additional model call and pres
   } finally { (await store.close()); }
 });
 
-test('category list selections route directly to Cash without AI and respect a disconnected Cash', async () => {
+for (const button of ['zenit:category:42:1791288000000:8', 'zenit:account:42:1791288000000:from:8', 'zenit:accounts:42:1791288000000:from:1']) {
+test(`Cash list selection ${button} routes without AI and respects a disconnected Cash`, async () => {
   const store = await createTestStore(config.key);
   try {
-    const selected = { ...message, text: '', button: 'zenit:category:42:1791288000000:8' };
+    const selected = { ...message, text: '', button };
     let calls = 0;
     const oauth = new OAuth(config, store);
     const assistant = new Assistant(config, store, oauth, { message: async (incoming: unknown) => {
@@ -41,6 +42,7 @@ test('category list selections route directly to Cash without AI and respect a d
     assert.equal(calls, 1);
   } finally { await store.close(); }
 });
+}
 test('cross-application questions query connected tools with server-owned identity; credentials stay out of model context', async () => {
   const store = (await createTestStore(config.key)); (await connection(store, 'day')); (await connection(store, 'calendar'));
   try {

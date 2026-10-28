@@ -10,8 +10,9 @@ function normalizeEvidence(text: string) {
     .replace(/\s+/g, ' ').trim();
 }
 // A model may propose parameters, but cannot supply a missing user time itself.
-export function checkCalendarTiming(change: Timing, userMessages: string[], timeZone: string) {
+export function checkCalendarTiming(change: Timing, userMessages: string[], timeZone: string, partial = false) {
   if (change.operation === 'delete' || (change.start === null && change.end === null && change.allDay === null)) return;
+  if (partial && !change.start && !change.end && !change.allDay) return;
   const evidence = normalizeEvidence(change.timingEvidence || '');
   if (!evidence || !userMessages.some(text => normalizeEvidence(text).includes(evidence))) {
     throw new CalendarTimingError('Qual é o horário de início e de fim? Informe em HH:mm, ou diga "dia inteiro". Ainda não preparei nenhum evento para gravar.');
@@ -27,7 +28,7 @@ export function checkCalendarTiming(change: Timing, userMessages: string[], time
   for (const match of text.matchAll(/\b([01]?\d|2[0-3])\s+(?:as|a|ate)\s+([01]?\d|2[0-3])\b/g)) { add(match[1]); add(match[2]); }
   const clock = (value: string | null) => value && Number.isFinite(Date.parse(value))
     ? new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(value)) : '';
-  if (!found.has(clock(change.start)) || !found.has(clock(change.end))) {
+  if (((!partial || change.start !== null) && !found.has(clock(change.start))) || ((!partial || change.end !== null) && !found.has(clock(change.end)))) {
     throw new CalendarTimingError('Qual é o horário de início e de fim? Informe em HH:mm, ou diga "dia inteiro". Ainda não preparei nenhum evento para gravar.');
   }
 }

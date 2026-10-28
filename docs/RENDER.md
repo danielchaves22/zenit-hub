@@ -181,6 +181,10 @@ Você pode ativar os conectores gradualmente. Para deixar Day desabilitado, omit
 
 O número WhatsApp e os vínculos Cash existentes são reutilizados. Não mantenha os dois serviços processando os mesmos eventos. Nenhuma configuração acima migra dados financeiros ou tarefas para o Hub.
 
+## Botão Adiar nos lembretes
+
+Publicar o Hub com o pre-deploy `npm run db:migrate` (schema 9) antes de ativar `WHATSAPP_REMINDER_SNOOZE_TEMPLATE=zenit_lembrete_confirmar_v4`. O modelo deve estar aprovado como **UTILITY**, em `pt_BR` na Meta, com Concluído e Adiar nessa ordem. Manter `WHATSAPP_REMINDER_CONFIRM_TEMPLATE` apontando para o modelo anterior aprovado durante a transição. Variável vazia mantém o comportamento anterior; modelo novo pendente, classificado como Marketing ou com botões incompatíveis também usa o modelo anterior. Com a variável configurada, a aprovação como Utility permite ativação automática, com cache de até um minuto. A mudança é somente no Hub; não exige deploy ou migração no Day. Veja [Notificações](NOTIFICACOES.md#adiar-uma-ocorrência) para o fluxo e as verificações.
+
 ## Referências
 
 - [Render: Web Services e porta pública](https://render.com/docs/web-services)

@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 7;
+export const schemaVersion = 9;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -125,6 +125,18 @@ export async function migrate(pool: Pool) {
         UPDATE history SET scope='legacy';
         CREATE INDEX history_sender_scope_id ON history(sender,scope,id DESC);
         INSERT INTO hub_schema_migrations(version) VALUES(7);`);
+    }
+    if (!rows.some(row => row.version === 8)) {
+      await client.query(`CREATE TABLE calendar_intents(
+        sender TEXT NOT NULL, scope TEXT NOT NULL, data TEXT NOT NULL, expires BIGINT NOT NULL,
+        PRIMARY KEY(sender,scope)
+      );
+      CREATE INDEX calendar_intents_expires ON calendar_intents(expires);
+      INSERT INTO hub_schema_migrations(version) VALUES(8);`);
+    }
+    if (!rows.some(row => row.version === 9)) {
+      await client.query(`ALTER TABLE reminder_occurrences ADD COLUMN snoozed_until BIGINT NOT NULL DEFAULT 0;
+        INSERT INTO hub_schema_migrations(version) VALUES(9);`);
     }
   });
 }
