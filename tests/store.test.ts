@@ -14,6 +14,38 @@ const message = { id: 'wamid.pg', sender: 'alice', text: 'oi', timestamp: Date.n
 const connection: Connection = { sender: 'alice', provider: 'day', accountId: 'account', label: 'alice@example.com',
   tokens: { access_token: 'access-private', refresh_token: 'refresh-private', expires_at: Date.now() + 3600_000 } };
 
+test('service window survives restart, uses inbound time and cannot be extended by replay or another sender', async t => {
+  const store = await createTestStore(key);
+  try {
+    let now = 1800000000000; t.mock.method(Date,'now',()=>now);
+    assert.equal(await store.serviceWindowOpen('alice'),false);
+    await store.enqueue({...message,id:'fresh',timestamp:now/1000});
+    const restarted = new Store(store.db,key);
+    assert.equal(await restarted.serviceWindowOpen('alice'),true);
+    assert.equal(await restarted.serviceWindowOpen('bob'),false);
+    now += 60_000;
+    await store.enqueue({...message,id:'fresh',timestamp:now/1000});
+    await store.enqueue({...message,id:'older',timestamp:(now-120_000)/1000});
+    await store.enqueue({...message,id:'future',timestamp:(now+60_000)/1000});
+    assert.equal(Number((await store.db.query("SELECT last_inbound_at FROM sender_state WHERE sender='alice'")).rows[0].last_inbound_at),1800000000000);
+    assert.equal(await store.serviceWindowOpen('alice',1800000000000+86400_000-60_001),true);
+    assert.equal(await store.serviceWindowOpen('alice',1800000000000+86400_000-60_000),false);
+    assert.equal(await store.serviceWindowOpen('alice',1800000000000-1),false);
+  } finally { await store.close(); }
+});
+
+test('migration 10 preserves existing sender preferences and fails closed for historical activity', async () => {
+  const store = await createTestStore(key);
+  try {
+    await store.db.query("INSERT INTO sender_state(sender,cash_disabled) VALUES('alice',true)");
+    await store.db.query('ALTER TABLE sender_state DROP COLUMN last_inbound_at');
+    await store.db.query('DELETE FROM hub_schema_migrations WHERE version=10');
+    await migrate(store.db);
+    assert.equal((await store.db.query("SELECT cash_disabled FROM sender_state WHERE sender='alice'")).rows[0].cash_disabled,true);
+    assert.equal(await store.serviceWindowOpen('alice'),false);
+  } finally { await store.close(); }
+});
+
 test('database configuration fails without PostgreSQL and bounds the connection pool', () => {
   assert.throws(() => readDatabaseConfig({}));
   assert.throws(() => readDatabaseConfig({ DATABASE_URL: 'file:hub.sqlite' }));

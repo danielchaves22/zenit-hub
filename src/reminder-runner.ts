@@ -152,7 +152,8 @@ export class ReminderRunner {
             r.repeat_minutes > 10080)
         )
           throw new Error("Invalid repeat interval");
-        if (!(await this.transport.approved("day_reminders", false, repeat))) {
+        const interactive = repeat && await this.transport.canSendInteractive(o.sender);
+        if (!interactive && !(await this.transport.approved("day_reminders", false, repeat))) {
           await this.queue.defer(o, now + 60_000);
           continue;
         }

@@ -141,6 +141,25 @@ export class ReminderQueue {
     );
     return rows[0] ? this.open(rows[0]) : null;
   }
+  async byMessage(sender: string, metaId: string) {
+    const { rows } = await this.store.db.query(`SELECT id,due,data FROM notification_deliveries
+      WHERE sender=$1 AND meta_id=$2 AND kind='day_reminders' AND state IN ('accepted','delivered','read')`, [sender,metaId]);
+    if (!rows[0]) return null;
+    const delivery = rows[0];
+    const data = this.store.vault.open<Partial<OccurrenceData>>(delivery.data,`notification:${delivery.id}:${sender}`);
+    if (typeof data.account !== 'string' || typeof data.reminderId !== 'string') return null;
+    const key = digest(JSON.stringify([sender,data.account,data.reminderId]));
+    const id = digest(JSON.stringify([key,Number(delivery.due)]));
+    const result = await this.store.db.query('SELECT * FROM reminder_occurrences WHERE id=$1 AND sender=$2',[id,sender]);
+    return result.rows[0] ? this.open(result.rows[0]) : null;
+  }
+  async awaiting(sender: string, now = Date.now()) {
+    const { rows } = await this.store.db.query(`SELECT o.* FROM reminder_occurrences o
+      JOIN notification_subscriptions s ON s.sender=o.sender AND s.kind='day_reminders' AND s.revision=o.revision
+      WHERE o.sender=$1 AND s.enabled AND o.state='pending' AND o.attempt>0 AND (o.valid_until IS NULL OR o.valid_until>$2)
+      ORDER BY o.due DESC,o.id LIMIT 11`,[sender,now]);
+    return rows.map(row => this.open(row));
+  }
   async status(sender: string, now = Date.now()) {
     const { rows } = await this.store.db.query(
       `SELECT count(*) FILTER(WHERE o.state='pending')::int pending,

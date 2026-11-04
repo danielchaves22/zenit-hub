@@ -18,6 +18,8 @@ export async function jsonRequest(fetcher: Fetch, url: string, init: RequestInit
       const body = await response.json();
       const candidate = body.error_code ?? body.code ?? body.error;
       if (['invalid_grant', 'refresh_token_not_found', 'refresh_token_already_used', 'invalid_client'].includes(candidate)) code = candidate;
+      if (new URL(url).hostname === 'graph.facebook.com' && response.status === 400 && body.error?.code === 131047)
+        code = 'whatsapp_window_closed';
     } catch { /* A non-JSON error still has an HTTP status. */ }
     throw new HttpError(response.status, code);
   }

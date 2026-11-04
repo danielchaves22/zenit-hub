@@ -165,7 +165,7 @@ export class Assistant {
     }
     const normalized = message.text.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.!?]+$/, '');
     const command = message.button?.startsWith('hub:connect:') ? `conectar ${message.button.split(':')[2]}` : normalized;
-    const notificationReply = await this.notifications.command(message.sender,command,message.button,message.text);
+    const notificationReply = await this.notifications.command(message.sender,command,message.button,message.text,message.replyTo);
     if(notificationReply) {
       await this.store.clearCalendarIntent(message.sender);
       await this.store.addHistory(message.sender,'user',message.text||'[Botão de notificações]');

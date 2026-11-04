@@ -1,6 +1,6 @@
 import type { Config } from './config.js';
 import type { Fetch } from './types.js';
-import { jsonRequest } from './http.js';
+import { HttpError, jsonRequest } from './http.js';
 import { PublicError } from './types.js';
 import type { NotificationKind } from './notification-store.js';
 
@@ -9,7 +9,12 @@ export class NotificationTransport {
   constructor(
     readonly config: Config,
     private fetcher: Fetch = fetch,
+    private windowOpen: (sender: string) => Promise<boolean> = async () => false,
   ) {}
+  async canSendInteractive(sender: string) {
+    if (!this.config.meta.token || !this.config.meta.phoneId) return false;
+    return this.windowOpen(sender);
+  }
   name(kind: NotificationKind, confirmation = false) {
     if(kind==='day_reminders'&&confirmation) return this.config.notifications.confirmationTemplate;
     return kind === 'daily_summary'
@@ -55,33 +60,47 @@ export class NotificationTransport {
   async send(sender: string, kind: NotificationKind, values: string[], completionButton?: string) {
     if(completionButton && (kind!=='day_reminders'||!/^hub:done:[A-Za-z0-9_-]{43}$/.test(completionButton))) throw new Error('Invalid reminder button');
     if (values.length !== (kind === 'daily_summary' ? 4 : 2)) throw new Error('Invalid template parameters');
+    if (completionButton && await this.canSendInteractive(sender)) {
+      const [title, time] = values.map(value => value.replace(/\s+/g,' ').trim());
+      const text = `Lembrete: *${title}*\nHorário: ${time}.\nLembrete criado por você no Zenit Day.`;
+      if (text.length <= 1024) {
+        try {
+          return await this.post(sender,{ type: 'interactive', interactive: { type: 'button', body: { text },
+            action: { buttons: [
+              { type: 'reply', reply: { id: completionButton, title: 'Concluído' } },
+              { type: 'reply', reply: { id: completionButton.replace('hub:done:','hub:snooze:'), title: 'Adiar' } },
+            ] } } });
+        } catch (error) {
+          // Only retry an explicit synchronous rejection. Timeouts/5xx may have
+          // already delivered a message and must not produce duplicate sends.
+          if (!(error instanceof HttpError) || error.code !== 'whatsapp_window_closed') throw error;
+        }
+      }
+    }
+    if (!await this.approved(kind,false,Boolean(completionButton))) throw new Error('Notification template unavailable');
     const snooze = Boolean(completionButton) && await this.snoozeApproved();
-    const result = await jsonRequest(
-      this.fetcher,
-      `https://graph.facebook.com/${this.config.meta.version}/${this.config.meta.phoneId}/messages`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${this.config.meta.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: sender,
-          type: 'template',
-          template: {
-            name: snooze ? this.config.notifications.snoozeTemplate : this.name(kind, Boolean(completionButton)),
-            language: { code: this.config.notifications.language },
-            components: [
-              {
-                type: 'body',
-                parameters: values.map((text) => ({ type: 'text', text: text.replace(/\s+/g, ' ').trim() })),
-              },
-              ...(completionButton?[{type:'button',sub_type:'quick_reply',index:'0',parameters:[{type:'payload',payload:completionButton}]}]:[]),
-              ...(snooze?[{type:'button',sub_type:'quick_reply',index:'1',parameters:[{type:'payload',payload:completionButton!.replace('hub:done:','hub:snooze:')}]}]:[]),
-            ],
+    return this.post(sender,{
+      type: 'template',
+      template: {
+        name: snooze ? this.config.notifications.snoozeTemplate : this.name(kind, Boolean(completionButton)),
+        language: { code: this.config.notifications.language },
+        components: [
+          {
+            type: 'body',
+            parameters: values.map((text) => ({ type: 'text', text: text.replace(/\s+/g, ' ').trim() })),
           },
-        }),
+          ...(completionButton?[{type:'button',sub_type:'quick_reply',index:'0',parameters:[{type:'payload',payload:completionButton}]}]:[]),
+          ...(snooze?[{type:'button',sub_type:'quick_reply',index:'1',parameters:[{type:'payload',payload:completionButton!.replace('hub:done:','hub:snooze:')}]}]:[]),
+        ],
       },
-      15_000,
-    );
+    });
+  }
+  private async post(sender: string, content: object) {
+    const result = await jsonRequest(this.fetcher,
+      `https://graph.facebook.com/${this.config.meta.version}/${this.config.meta.phoneId}/messages`, {
+        method: 'POST', headers: { Authorization: `Bearer ${this.config.meta.token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({messaging_product:'whatsapp',to:sender,...content}),
+      },15_000);
     const id = result.messages?.[0]?.id;
     if (typeof id !== 'string') throw new Error('Missing WhatsApp message id');
     return id;

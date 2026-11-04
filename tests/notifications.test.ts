@@ -106,6 +106,7 @@ async function fixture() {
   };
   const cash = { connected: async () => false };
   const transport = {
+    canSendInteractive: async () => false,
     approved: async () => state.approved,
     require: async () => {
       if (!state.approved) throw new Error('template unavailable');
@@ -1281,4 +1282,102 @@ test('reconnection confirmation does not append a stale request to reconnect bef
     assert(!sent[0].text.includes('perdeu a autorização'));
     assert.equal((await f.n.db.subscription(sender, 'day_reminders'))!.problem, null);
   } finally { await f.store.close(); }
+});
+
+test('confirmation reminders use two interactive buttons within the service window without template approval',async()=>{
+  const sent:any[]=[];
+  const done='hub:done:'+randomBytes(32).toString('base64url');
+  const transport=new NotificationTransport(config,async(url,init)=>{
+    assert(!String(url).includes('message_templates'));
+    sent.push(JSON.parse(init!.body as string));
+    return new Response(JSON.stringify({messages:[{id:'wamid.interactive'}]}));
+  },async s=>s===sender);
+  assert.equal(await transport.send(sender,'day_reminders',['Livro','Hoje às 06h30'],done),'wamid.interactive');
+  assert.equal(sent[0].type,'interactive');
+  assert.equal(sent[0].interactive.body.text,'Lembrete: *Livro*\nHorário: Hoje às 06h30.\nLembrete criado por você no Zenit Day.');
+  assert.deepEqual(sent[0].interactive.action.buttons.map((b:any)=>b.reply),[
+    {id:done,title:'Concluído'},{id:done.replace('hub:done:','hub:snooze:'),title:'Adiar'},
+  ]);
+  assert.equal(await transport.canSendInteractive('bob'),false);
+});
+
+test('interactive fallback is limited to an explicit closed-window rejection, never an uncertain delivery',async()=>{
+  const done='hub:done:'+randomBytes(32).toString('base64url');
+  for(const outcome of ['closed','timeout','server','outside']) {
+    const sent:any[]=[];
+    const transport=new NotificationTransport(config,async(url,init)=>{
+      if(String(url).includes('message_templates')) return new Response(JSON.stringify({data:[{
+        name:config.notifications.confirmationTemplate,status:'APPROVED',language:'pt_BR',category:'UTILITY',
+      }]}));
+      const body=JSON.parse(init!.body as string); sent.push(body);
+      if(body.type==='interactive') {
+        if(outcome==='timeout') throw new Error('timeout');
+        return new Response(JSON.stringify({error:{code:outcome==='closed'?131047:1}}),{status:outcome==='closed'?400:500});
+      }
+      return new Response(JSON.stringify({messages:[{id:'wamid.fallback'}]}));
+    },async()=>outcome!=='outside');
+    if(['closed','outside'].includes(outcome)) {
+      assert.equal(await transport.send(sender,'day_reminders',['Livro','06:30'],done),'wamid.fallback');
+      assert.equal(sent.at(-1).type,'template');
+      assert.equal(sent.at(-1).template.name,config.notifications.confirmationTemplate);
+      assert.equal(sent.length,outcome==='closed'?2:1);
+    } else {
+      await assert.rejects(transport.send(sender,'day_reminders',['Livro','06:30'],done));
+      assert.equal(sent.length,1);
+    }
+  }
+});
+
+test('runner can send a confirmation reminder in an open service window while templates are pending',async t=>{
+  const f=await fixture();
+  try {
+    const now=Date.now()+1000;t.mock.method(Date,'now',()=>now);
+    await f.subscribe(); f.state.approved=false;
+    t.mock.method(f.n.transport,'canSendInteractive',async()=>true);
+    await deliveredReminder(f,now);
+    assert.equal(f.state.sent.length,1);
+  } finally {await f.store.close();}
+});
+
+test('text snooze selects a sole occurrence and asks when multiple reminders are awaiting confirmation',async t=>{
+  const f=await fixture();
+  try {
+    const now=Date.now()+1000;t.mock.method(Date,'now',()=>now);
+    assert.match((await f.n.command(sender,'adiar 20 minutos'))!.text,/Não há lembrete/);
+    const a=await deliveredReminder(f,now);
+    assert.match((await f.n.command(sender,'adiar 20 minutos'))!.text,/Adiado por 20 minutos/);
+    assert.equal((await f.n.queue.byToken(sender,a.token))!.snoozed_until,now+20*60_000);
+    const b=await deliveredReminder(f,now,{title:'Outro'});
+    const reply=(await f.n.command(sender,'adiar 30 minutos'))!;
+    assert.equal(reply.list!.rows.length,2);
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,0);
+    await f.n.command(sender,'',reply.list!.rows.find(r=>r.id===b.button)!.id);
+    await f.n.command(sender,'30');
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,now+30*60_000);
+    assert.equal(await f.n.command(sender,'adiar reunião em 20 minutos'),null);
+    assert.equal(f.state.completed.size,0);assert.equal(f.state.writes.length,0);
+  } finally {await f.store.close();}
+});
+
+test('reply-to snooze targets the quoted delivery, rejects other senders and obsolete messages, and bypasses AI',async t=>{
+  const f=await fixture();
+  try {
+    const now=Date.now()+1000;t.mock.method(Date,'now',()=>now);
+    const a=await deliveredReminder(f,now);
+    const b=await deliveredReminder(f,now,{title:'Outro'});
+    const assistant=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{} as any,
+      async()=>{throw new Error('AI must not run');},undefined,f.n);
+    const raw={object:'whatsapp_business_account',entry:[{changes:[{field:'messages',value:{metadata:{phone_number_id:'phone'},
+      messages:[{id:'quoted',from:sender,timestamp:now/1000,type:'text',text:{body:'Adiar 20 minutos'},context:{id:'wamid.1'}}]}}]}]};
+    const body=Buffer.from(JSON.stringify(raw));
+    const [parsed]=new WhatsApp(config).parse(body,metaSignature(body,config.meta.secret));
+    assert.equal(parsed.replyTo,'wamid.1');
+    assert.match((await assistant.handle(parsed))[0].text,/Adiado por 20 minutos: Livro/);
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,0);
+    assert.equal(await f.n.queue.byMessage('bob','wamid.1'),null);
+    assert.match((await f.n.command(sender,'adiar 10 minutos',undefined,undefined,'wamid.unknown'))!.text,/Não identifiquei/);
+    await f.n.queue.finish((await f.n.queue.byToken(sender,a.token))!,'completed');
+    await assert.rejects(f.n.command(sender,'adiar 10 minutos',undefined,undefined,'wamid.1'),/vigente/);
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,0);
+  } finally {await f.store.close();}
 });

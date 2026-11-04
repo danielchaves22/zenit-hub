@@ -93,5 +93,37 @@
         { "type": "QUICK_REPLY", "text": "Adiar" }
       ]
     }]
-  }
+  },
+{
+  "name": "zenit_lembrete_confirmar_v5",
+  "language": "pt_BR",
+  "category": "UTILITY",
+  "components": [
+    {
+      "type": "BODY",
+      "text": "Lembrete: *{{1}}*\nHorário: {{2}}.\nLembrete criado por você no Zenit Day.",
+      "example": {
+        "body_text": [
+          [
+            "Separar o livro para devolver na escola",
+            "Hoje às 06h30"
+          ]
+        ]
+      }
+    },
+    {
+      "type": "BUTTONS",
+      "buttons": [
+        {
+          "type": "QUICK_REPLY",
+          "text": "Concluído"
+        },
+        {
+          "type": "QUICK_REPLY",
+          "text": "Adiar"
+        }
+      ]
+    }
+  ]
+}
 ]

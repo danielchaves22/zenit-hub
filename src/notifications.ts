@@ -93,7 +93,7 @@ export class Notifications {
     readonly day: Day,
     readonly cash: Cash,
     readonly calendar: Calendar,
-    readonly transport = new NotificationTransport(config),
+    readonly transport = new NotificationTransport(config,fetch,sender => store.serviceWindowOpen(sender)),
   ) {
     this.db = new NotificationStore(store);
     this.queue = new ReminderQueue(store);
@@ -228,12 +228,12 @@ export class Notifications {
       if (typeof this.transport.snoozeApproved === 'function' && await this.transport.snoozeApproved())
         return 'Lembretes com botões Concluído e Adiar: modelo aprovado no WhatsApp. Adiar pergunta os minutos e pausa somente a ocorrência atual.';
       return await this.transport.approved('day_reminders',false,true)
-        ? 'Lembretes com botão Concluído: modelo aprovado no WhatsApp. O botão Adiar aguarda configuração/aprovação do novo modelo.'
+        ? 'Lembretes com botão Concluído: modelo aprovado no WhatsApp. Adiar aparece nas 24h após sua última mensagem; fora dessa janela, aguarda aprovação do novo modelo. Você também pode responder ao lembrete com “adiar 20 minutos”.'
         : 'Lembretes com botão Concluído: envio aguardando configuração/aprovação do modelo no WhatsApp; os lembretes sem confirmação usam outro modelo.';
     } catch {return 'Lembretes com botão Concluído: não foi possível verificar a disponibilidade do modelo no WhatsApp agora.';}
   }
-  async command(sender: string, command: string, button?: string, originalText = command): Promise<Reply | null> {
-    const snoozed = await this.snooze.command(sender,command,button);
+  async command(sender: string, command: string, button?: string, originalText = command, replyTo?: string): Promise<Reply | null> {
+    const snoozed = await this.snooze.command(sender,command,button,replyTo);
     if (snoozed) return snoozed;
     const selected = await this.selection.command(sender,command,button,originalText);
     if (selected) return selected;

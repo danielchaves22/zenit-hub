@@ -10,6 +10,7 @@ const flowResponse = z.object({ flow_token: z.string().regex(/^[A-Za-z0-9_-]{43}
 const incomingSchema = z.object({ id: z.string().min(1).max(256), from: z.string().regex(/^[A-Za-z0-9_.-]{5,128}$/),
   timestamp: z.coerce.number().int().positive(), type: z.string(), text: z.object({ body: z.string().max(8000) }).optional(),
   audio: z.object({ id: z.string().regex(/^\d{1,128}$/) }).optional(),
+  context: z.object({ id: z.string().min(1).max(256) }).optional(),
   interactive: z.object({ button_reply: z.object({ id: z.string().min(1).max(256) }).optional(),
     list_reply: z.object({ id: z.string().min(1).max(200) }).optional(),
     nfm_reply: z.object({ response_json: z.string().min(1).max(4000) }).optional()
@@ -43,6 +44,7 @@ export class WhatsApp {
           text: message.type === 'text' ? message.text?.body || '' : '',
           button: message.type === 'interactive' ? message.interactive?.button_reply?.id ?? message.interactive?.list_reply?.id : message.type === 'button' ? message.button?.payload : undefined,
           ...(flowReply ? { flowReply } : {}),
+          ...(message.context ? { replyTo: message.context.id } : {}),
           ...(message.type === 'audio' && message.audio ? { audio: { mediaId: message.audio.id } } : {}) });
       }
     }

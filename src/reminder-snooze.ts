@@ -30,7 +30,34 @@ export class ReminderSnooze {
     return { o, reminder: status.reminder, validUntil };
   }
 
-  async command(sender: string, command: string, button?: string): Promise<Reply | null> {
+  async command(sender: string, command: string, button?: string, replyTo?: string): Promise<Reply | null> {
+    // Restrict this shortcut to reminder language. Never intercept "adiar reunião".
+    const request = !button && /^(?:adiar|adie)(?: (?:o |este |esse |meu )?lembrete)?(?: (?:por |em )?([+-]?\d[\d.,]*)(?:\s*(?:min(?:uto)?s?))?)?[.!?]?$/.exec(command);
+    if (request) {
+      let selected;
+      if (replyTo) {
+        selected = await this.queue.byMessage(sender,replyTo);
+        if (!selected) return { text: 'Não identifiquei um lembrete nessa mensagem. Responda ao aviso desejado com “adiar 20 minutos”.' };
+      } else {
+        const previous = await this.db.pending<SnoozeDraft>(sender);
+        if (previous?.data.type === 'reminder_snooze') selected = await this.queue.byToken(sender,previous.data.token);
+        else {
+          const choices = await this.queue.awaiting(sender);
+          if (!choices.length) return { text: 'Não há lembrete aguardando confirmação para adiar.' };
+          if (choices.length > 10) return { text: 'Há vários lembretes pendentes. Use Responder no aviso desejado e envie “adiar 20 minutos”.' };
+          if (choices.length > 1) return {
+            text: 'Qual lembrete deseja adiar? Escolha na lista e depois informe os minutos. Também pode responder diretamente ao aviso com “adiar 20 minutos”.',
+            list: { button: 'Escolher lembrete', rows: choices.map((o,i) => ({
+              id: `hub:snooze:${o.data.token}`, title: `${i+1}. ${o.data.title}`.slice(0,24), description: o.data.title.slice(0,72),
+            })) },
+          };
+          selected = choices[0];
+        }
+      }
+      if (!selected) throw new PublicError(unavailable);
+      const prompt = await this.command(sender,'',`hub:snooze:${selected.data.token}`);
+      return request[1] ? this.command(sender,request[1]) : prompt;
+    }
     const start = /^hub:snooze:([A-Za-z0-9_-]{43})$/.exec(button || '');
     if (start) {
       const previous = await this.db.pending<SnoozeDraft>(sender,true);

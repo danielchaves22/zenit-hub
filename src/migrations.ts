@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 9;
+export const schemaVersion = 10;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -137,6 +137,10 @@ export async function migrate(pool: Pool) {
     if (!rows.some(row => row.version === 9)) {
       await client.query(`ALTER TABLE reminder_occurrences ADD COLUMN snoozed_until BIGINT NOT NULL DEFAULT 0;
         INSERT INTO hub_schema_migrations(version) VALUES(9);`);
+    }
+    if (!rows.some(row => row.version === 10)) {
+      await client.query(`ALTER TABLE sender_state ADD COLUMN last_inbound_at BIGINT NOT NULL DEFAULT 0;
+        INSERT INTO hub_schema_migrations(version) VALUES(10);`);
     }
   });
 }

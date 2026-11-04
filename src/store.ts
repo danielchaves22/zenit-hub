@@ -246,9 +246,25 @@ export class Store {
     await this.db.query('DELETE FROM oauth_links WHERE sender=$1 AND provider=$2', [sender, provider]);
   }
   async enqueue(message: Incoming) {
-    const result = await this.db.query(`INSERT INTO inbox(id,sender,data,created) VALUES($1,$2,$3,$4)
-      ON CONFLICT(id) DO NOTHING`, [message.id, message.sender, this.vault.seal(message, `inbox:${message.id}`), Date.now()]);
-    return result.rowCount === 1;
+    return transaction(this.db, async tx => {
+      const now = Date.now(), received = message.timestamp * 1000;
+      const result = await tx.query(`INSERT INTO inbox(id,sender,data,created) VALUES($1,$2,$3,$4)
+        ON CONFLICT(id) DO NOTHING`, [message.id, message.sender, this.vault.seal(message, `inbox:${message.id}`), now]);
+      // Only fresh, authenticated inbound envelopes extend the service window.
+      // Use Meta's timestamp, not when a delayed webhook happens to be processed.
+      if (result.rowCount && Number.isSafeInteger(received) && received > 0 && received <= now + 5000) {
+        await tx.query(`INSERT INTO sender_state(sender,last_inbound_at) VALUES($1,$2)
+          ON CONFLICT(sender) DO UPDATE SET last_inbound_at=GREATEST(sender_state.last_inbound_at,excluded.last_inbound_at)`,
+        [message.sender, Math.min(now,received)]);
+      }
+      return result.rowCount === 1;
+    });
+  }
+  async serviceWindowOpen(sender: string, now = Date.now()) {
+    const { rows } = await this.db.query('SELECT last_inbound_at FROM sender_state WHERE sender=$1', [sender]);
+    const last = Number(rows[0]?.last_inbound_at ?? 0);
+    // Leave a minute for delivery latency. Missing/invalid state fails closed.
+    return last > 0 && last <= now && now < last + 86400_000 - 60_000;
   }
   async nextMessage(): Promise<Incoming | null> {
     const { rows } = await this.db.query(`UPDATE inbox SET state='processing' WHERE id=(
