@@ -161,7 +161,8 @@ export class Assistant {
           : 'Envie "conexões" por texto para conectar Cash, Day ou Calendar antes de usar mensagens de voz.' }];
       }
       const text = await this.audio.transcribe(message.audio.mediaId);
-      message = { id: message.id, sender: message.sender, timestamp: message.timestamp, text };
+      message = { id: message.id, sender: message.sender, timestamp: message.timestamp, text,
+        ...(message.replyTo ? { replyTo: message.replyTo } : {}) };
     }
     const normalized = message.text.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[.!?]+$/, '');
     const command = message.button?.startsWith('hub:connect:') ? `conectar ${message.button.split(':')[2]}` : normalized;

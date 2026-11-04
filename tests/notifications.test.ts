@@ -1366,18 +1366,21 @@ test('reply-to snooze targets the quoted delivery, rejects other senders and obs
     const a=await deliveredReminder(f,now);
     const b=await deliveredReminder(f,now,{title:'Outro'});
     const assistant=new Assistant(config,f.store,new OAuth(config,f.store),f.cash as any,f.day as any,{} as any,
-      async()=>{throw new Error('AI must not run');},undefined,f.n);
+      async()=>{throw new Error('AI must not run');},{transcribe:async()=> 'Adiar 10 minutos'},f.n);
     const raw={object:'whatsapp_business_account',entry:[{changes:[{field:'messages',value:{metadata:{phone_number_id:'phone'},
-      messages:[{id:'quoted',from:sender,timestamp:now/1000,type:'text',text:{body:'Adiar 20 minutos'},context:{id:'wamid.1'}}]}}]}]};
+      messages:[{id:'quoted',from:sender,timestamp:Math.floor(now/1000),type:'text',text:{body:'Adiar 20 minutos'},context:{id:'wamid.1'}}]}}]}]};
     const body=Buffer.from(JSON.stringify(raw));
     const [parsed]=new WhatsApp(config).parse(body,metaSignature(body,config.meta.secret));
     assert.equal(parsed.replyTo,'wamid.1');
     assert.match((await assistant.handle(parsed))[0].text,/Adiado por 20 minutos: Livro/);
     assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,0);
+    assert.match((await assistant.handle({id:'quoted-audio',sender,text:'',timestamp:now/1000,
+      audio:{mediaId:'123'},replyTo:'wamid.2'}))[0].text,/Adiado por 10 minutos: Outro/);
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,now+10*60_000);
     assert.equal(await f.n.queue.byMessage('bob','wamid.1'),null);
     assert.match((await f.n.command(sender,'adiar 10 minutos',undefined,undefined,'wamid.unknown'))!.text,/Não identifiquei/);
     await f.n.queue.finish((await f.n.queue.byToken(sender,a.token))!,'completed');
     await assert.rejects(f.n.command(sender,'adiar 10 minutos',undefined,undefined,'wamid.1'),/vigente/);
-    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,0);
+    assert.equal((await f.n.queue.byToken(sender,b.token))!.snoozed_until,now+10*60_000);
   } finally {await f.store.close();}
 });
