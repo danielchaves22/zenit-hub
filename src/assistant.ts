@@ -14,6 +14,8 @@ import { PublicError, type Fetch, type Incoming, type Provider, type Reply } fro
 import { Notifications } from './notifications.js';
 import { notificationTools, reminderEditTool } from './notification-tools.js';
 import { Guests, guestNumberChoices } from './guests.js';
+import { McpGrants } from './mcp-grants.js';
+import { mcpPairingReply } from './mcp-pairing.js';
 
 function tool(name: string, description: string, properties: Record<string, unknown>) {
   return { type: 'function', name, description, strict: true,
@@ -105,11 +107,13 @@ export class Assistant {
   readonly notifications: Notifications;
   readonly guests: Guests;
   readonly calendarIntents: CalendarIntents;
+  private readonly mcpGrants: McpGrants;
   constructor(readonly config: Config, readonly store: Store, readonly oauth: OAuth, readonly cash: Cash,
     readonly day: Day, readonly calendar: Calendar, private fetcher: Fetch = fetch,
     private audio: Pick<AudioTranscriber, 'transcribe'> = new AudioTranscriber(config), notifications?: Notifications) {
     this.notifications = notifications || new Notifications(config,store,day,cash,calendar);
     this.guests = new Guests(store);
+    this.mcpGrants = new McpGrants(store);
     this.calendarIntents = new CalendarIntents(store, config.timeZone, (sender, change) => calendar.prepare(sender, change));
   }
 
@@ -145,6 +149,8 @@ export class Assistant {
   }
 
   async handle(message: Incoming): Promise<Reply[]> {
+    const pairing = await mcpPairingReply(message, this.config.key, this.mcpGrants, this.store, this.cash);
+    if (pairing) return [pairing];
     const connections = await this.connections(message.sender);
     return this.store.withHistoryScope(message.sender, workspaceScope(connections.cashConnected ? connections.cashStatus?.workspace : null),
       () => this.handleInContext(message, connections));

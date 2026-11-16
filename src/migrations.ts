@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 10;
+export const schemaVersion = 11;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -141,6 +141,38 @@ export async function migrate(pool: Pool) {
     if (!rows.some(row => row.version === 10)) {
       await client.query(`ALTER TABLE sender_state ADD COLUMN last_inbound_at BIGINT NOT NULL DEFAULT 0;
         INSERT INTO hub_schema_migrations(version) VALUES(10);`);
+    }
+    if (!rows.some(row => row.version === 11)) {
+      await client.query(`CREATE TABLE mcp_clients (
+        id TEXT PRIMARY KEY, data TEXT NOT NULL, created BIGINT NOT NULL, approved BOOLEAN NOT NULL DEFAULT FALSE
+      );
+      CREATE INDEX mcp_clients_unapproved ON mcp_clients(created) WHERE NOT approved;
+      CREATE TABLE mcp_grants (
+        id UUID PRIMARY KEY, client_id TEXT NOT NULL REFERENCES mcp_clients(id),
+        resource TEXT NOT NULL, sender TEXT NOT NULL, workspace_id INTEGER NOT NULL CHECK(workspace_id > 0),
+        workspace_reference TEXT NOT NULL CHECK(workspace_reference <> ''), expires BIGINT NOT NULL
+      );
+      CREATE INDEX mcp_grants_sender ON mcp_grants(sender);
+      CREATE INDEX mcp_grants_expiry ON mcp_grants(expires);
+      CREATE TABLE mcp_requests (
+        hash TEXT PRIMARY KEY, browser_hash TEXT NOT NULL, client_id TEXT NOT NULL REFERENCES mcp_clients(id),
+        redirect_uri TEXT NOT NULL, state TEXT, challenge TEXT NOT NULL, resource TEXT NOT NULL,
+        expires BIGINT NOT NULL, grant_id UUID UNIQUE REFERENCES mcp_grants(id) ON DELETE CASCADE
+      );
+      CREATE INDEX mcp_requests_expiry ON mcp_requests(expires);
+      CREATE TABLE mcp_codes (
+        hash TEXT PRIMARY KEY, grant_id UUID NOT NULL REFERENCES mcp_grants(id) ON DELETE CASCADE,
+        redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires BIGINT NOT NULL, used BOOLEAN NOT NULL DEFAULT FALSE
+      );
+      CREATE INDEX mcp_codes_grant ON mcp_codes(grant_id);
+      CREATE INDEX mcp_codes_expiry ON mcp_codes(expires);
+      CREATE TABLE mcp_tokens (
+        hash TEXT PRIMARY KEY, grant_id UUID NOT NULL REFERENCES mcp_grants(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('access', 'refresh')), expires BIGINT NOT NULL, used BOOLEAN NOT NULL DEFAULT FALSE
+      );
+      CREATE INDEX mcp_tokens_grant ON mcp_tokens(grant_id);
+      CREATE INDEX mcp_tokens_expiry ON mcp_tokens(expires);
+      INSERT INTO hub_schema_migrations(version) VALUES(11);`);
     }
   });
 }

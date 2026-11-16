@@ -6,13 +6,15 @@ import { WhatsApp } from './whatsapp.js';
 import { digest, equal, randomToken } from './security.js';
 import { PublicError, type Provider } from './types.js';
 import { NotificationStore } from './notification-store.js';
+import { Cash } from './connectors/cash.js';
+import { cashMcpRouter } from './mcp.js';
 
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const page = (title: string, content: string) => `<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)} · Zenit Hub</title><body><main><h1>${escape(title)}</h1>${content}</main></body></html>`;
 function cookieValue(header: string | undefined, name: string) {
   return (header || '').split(';').map(c => c.trim()).find(c => c.startsWith(`${name}=`))?.slice(name.length + 1) || '';
 }
-export function createApp(config: Config, store: Store, oauth: OAuth, whatsapp: WhatsApp) {
+export function createApp(config: Config, store: Store, oauth: OAuth, whatsapp: WhatsApp, cash = new Cash(config.cash)) {
   const app = express(); app.disable('x-powered-by');
   app.use((_req, res, next) => {
     // Preserve the Origin of same-origin form POSTs without leaking link tokens
@@ -69,6 +71,7 @@ export function createApp(config: Config, store: Store, oauth: OAuth, whatsapp: 
       return res.status(400).type('html').send(page('Conexão não concluída', `<p>${escape(error instanceof PublicError ? error.message : 'Inicie novamente pelo WhatsApp.')}</p>`));
     }
   });
+  app.use(cashMcpRouter(config, store, cash));
   app.use((_error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => res.status(500).json({ error: 'Solicitação não concluída.' }));
   return app;
 }

@@ -4,6 +4,7 @@ Backend de conexões para conversar com Cash, Day e Google Calendar pelo WhatsAp
 
 ## Capacidades
 
+- [MCP de leitura do Cash](docs/MCP_CASH.md) para consultar saldos, obrigações e gastos em uma área autorizada, pelo cliente de sua escolha.
 - Consultas financeiras, inclusive gastos realizados com filtros, totais e média mensal; escritas continuam no fluxo confirmado do Cash.
 - Seleção e alternância de área de trabalho pelo WhatsApp, com contexto identificado nas respostas e confirmações. Envie `minhas áreas` ou `workspaces`; veja [comandos e limites](docs/WORKSPACES.md).
 - Consulta de assuntos do Day e gestão de lembretes com autorização adicional. `editar lembrete`, `pausar lembrete` e `remover lembrete` abrem listas numeradas no WhatsApp. Escolha o número; na edição, diga depois o que deseja mudar. Toda alteração exige revisão e confirmação pelo botão.

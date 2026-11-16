@@ -16,9 +16,10 @@
     "db:migrate": "node --env-file-if-exists=.env dist/migrate.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
     "express": "5.2.1",
     "pg": "8.23.0",
-    "zod": "3.24.3"
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/express": "5.0.6",

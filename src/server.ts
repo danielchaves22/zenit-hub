@@ -23,9 +23,10 @@ catch {
 }
 const oauth = new OAuth(config, store);
 const whatsapp = new WhatsApp(config);
-const assistant = new Assistant(config, store, oauth, new Cash(config.cash), new Day(oauth), new Calendar(oauth));
+const cash = new Cash(config.cash);
+const assistant = new Assistant(config, store, oauth, cash, new Day(oauth), new Calendar(oauth));
 const worker = new Worker(store, assistant, whatsapp);
-const server = createApp(config, store, oauth, whatsapp).listen(config.port, config.host, () => console.log(`Zenit Hub escutando em ${config.host}:${config.port}.`));
+const server = createApp(config, store, oauth, whatsapp, cash).listen(config.port, config.host, () => console.log(`Zenit Hub escutando em ${config.host}:${config.port}.`));
 const interval = setInterval(() => void worker.tick().catch(() => console.error('hub.worker.failed')), 500);
 let stopping = false;
 async function stop() {

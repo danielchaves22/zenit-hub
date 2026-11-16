@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { transaction } from './database.js';
 import { schemaVersion } from './migrations.js';
+import { pruneMcpGrants } from './mcp-grants.js';
 import { digest, randomToken, Vault } from './security.js';
 import type { Connection, Incoming, Provider, Reply, Tokens } from './types.js';
 import type { Preferences } from './notification-store.js';
@@ -316,6 +317,7 @@ export class Store {
   }
   async prune() {
     await transaction(this.db, async tx => {
+      await pruneMcpGrants(tx, Date.now());
       await tx.query('DELETE FROM oauth_links WHERE expires<$1', [Date.now()]);
       await tx.query('DELETE FROM guest_favorite_drafts WHERE expires<$1', [Date.now() - 30 * 86400_000]);
       await tx.query("DELETE FROM calendar_drafts WHERE expires<$1 AND state<>'executing'", [Date.now() - 30 * 86400_000]);
