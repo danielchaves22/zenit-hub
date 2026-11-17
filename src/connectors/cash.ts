@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { bridgeSignature } from '../security.js';
+import { assistantDefaultsSchema } from '../assistant-defaults.js';
 import { jsonRequest } from '../http.js';
 import type { Config } from '../config.js';
 import type { Fetch, Incoming, Reply } from '../types.js';
@@ -14,14 +15,17 @@ export type CashStatus = { connected: boolean; workspace: Workspace | null; work
 export class Cash {
   constructor(private config: Config['cash'], private fetcher: Fetch = fetch) {}
   get enabled() { return Boolean(this.config.url && this.config.secret.length >= 32); }
-  async call(body: Record<string, unknown>) {
+  async call(body: Record<string, unknown>, timeoutMs = body.operation === 'message' ? 240_000 : 45_000) {
     if (!this.enabled) throw new PublicError('O conector Cash ainda precisa ser configurado no Hub.');
     const path = '/api/integrations/hub/bridge';
     const text = JSON.stringify(body); const time = String(Date.now()); const nonce = randomBytes(16).toString('hex');
     return jsonRequest(this.fetcher, this.config.url + path, { method: 'POST', body: text, headers: {
       'Content-Type': 'application/json', 'X-Hub-Timestamp': time, 'X-Hub-Nonce': nonce,
       'X-Hub-Signature': bridgeSignature(text, time, nonce, path, this.config.secret)
-    } }, body.operation === 'message' ? 240_000 : 45_000);
+    } }, timeoutMs);
+  }
+  async assistantDefaults() {
+    return assistantDefaultsSchema.parse(await this.call({ operation: 'assistant_defaults' }, 1_500));
   }
   async connected(sender: string) { return this.enabled && (await this.call({ operation: 'status', sender })).connected === true; }
   async status(sender: string): Promise<CashStatus> {

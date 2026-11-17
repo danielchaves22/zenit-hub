@@ -38,7 +38,7 @@ Esses pedidos ficam cifrados em `calendar_intents`, separados das prévias confi
 
 PostgreSQL guarda conexões, vínculos temporários, filas, histórico curto, rascunhos e estado de notificações. Credenciais e conteúdo sensível usam AES-256-GCM. Não há cópia integral das bases financeiras, dos assuntos ou da agenda. A chave HUB_ENCRYPTION_KEY deve permanecer recuperável junto ao backup do banco.
 
-As migrações SQL são controladas pelo próprio projeto em [src/migrations.ts](../src/migrations.ts), com registro em hub_schema_migrations; o Hub não usa Prisma. A versão atual é 9, que acrescenta `snoozed_until` às ocorrências de lembretes para adiar um aviso sem alterar sua regra no Day. A versão 8 acrescentou `calendar_intents` para os pedidos incompletos de eventos. `npm run db:migrate` aplica as versões; a inicialização apenas verifica a compatibilidade. A primeira migração recusa schema já ocupado.
+O Hub registra as migrações SQL em `hub_schema_migrations`. A versão 12 guarda o último padrão de modelo e raciocínio recebido do Zenit Admin. O comando `npm run db:migrate` aplica as migrações, e o servidor verifica a versão na inicialização. A primeira migração exige um schema vazio. [Migrações do Hub](../src/migrations.ts)
 
 O webhook valida assinatura/destino e persiste antes de responder 202. Um worker serial usa bloqueio de sessão PostgreSQL para evitar concorrência entre processos durante deploys. A entrega de notificações usa esse mesmo processo; não exige cron separado no Day ou no Render. IDs de mensagens e ocorrências impedem repetição. Operações com resultado incerto não são reenviadas automaticamente.
 

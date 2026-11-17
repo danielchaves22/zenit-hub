@@ -30,6 +30,10 @@ test('signed voice is transcribed once, routed by Hub and reaches Cash as text w
     const raw = String(init?.body); const headers = new Headers(init?.headers);
     assert.equal(headers.get('x-hub-signature'), bridgeSignature(raw, headers.get('x-hub-timestamp')!, headers.get('x-hub-nonce')!, '/api/integrations/hub/bridge', config.cash.secret));
     const body = JSON.parse(raw);
+    if (body.operation === 'assistant_defaults') {
+      assert.deepEqual(body, { operation: 'assistant_defaults' });
+      return Response.json({ model: 'global-test', reasoningEffort: null });
+    }
     if (body.operation === 'status' || body.operation === 'workspaces') return new Response(JSON.stringify({ connected: true, workspace, workspaces: [workspace] }));
     cashCalls.push(body);
     assert.equal(body.sender, sender);
@@ -47,6 +51,8 @@ test('signed voice is transcribed once, routed by Hub and reaches Cash as text w
     (async (_url, init) => {
       modelCalls++;
       const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, 'global-test');
+      assert.equal(body.reasoning, undefined);
       assert.equal(body.input.at(-1).content, 'Gastei cinquenta reais com almoço.');
       assert(!JSON.stringify(body).includes('123456789'));
       return new Response(JSON.stringify({ output: [{ type: 'function_call', name: 'cash_assistant', call_id: '1', arguments: '{}' }] }));

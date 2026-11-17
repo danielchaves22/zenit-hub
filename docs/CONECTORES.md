@@ -57,7 +57,7 @@ Eventos existentes da agenda organizadora permitem acrescentar favoritos ou e-ma
 
 ### IA e WhatsApp
 
-Configure `OPENAI_API_KEY` e `OPENAI_MODEL` para consultas entre aplicações. Os comandos de conexão não usam IA. Se somente Cash estiver conectado, usa-se a configuração de IA já existente no Cash.
+Configure `OPENAI_API_KEY` no Hub. O chat usa o modelo e o raciocínio de **Padrão dos assistentes** no Zenit Admin pela ponte assinada. O padrão inicial é GPT-6.2 Sol com raciocínio baixo. A política é global e também atende quem conectou apenas Day ou Calendar. Os lançamentos encaminhados ao assistente financeiro usam o modelo efetivo da empresa no Cash.
 
 No piloto, configure `HUB_ALLOWED_SENDERS` com os identificadores permitidos. Defina no Hub as credenciais do número WhatsApp, App Secret e token de verificação. A versão da Graph API é configurável e deve ser a mesma validada no ambiente. A migração não modifica a configuração da Meta automaticamente.
 

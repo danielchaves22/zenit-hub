@@ -10,6 +10,7 @@ import { CalendarTimingError, checkCalendarTiming } from './calendar-evidence.js
 import { CalendarIntents } from './calendar-intents.js';
 import { jsonRequest } from './http.js';
 import { AudioTranscriber } from './audio.js';
+import { AssistantDefaultsCache } from './assistant-defaults.js';
 import { PublicError, type Fetch, type Incoming, type Provider, type Reply } from './types.js';
 import { Notifications } from './notifications.js';
 import { notificationTools, reminderEditTool } from './notification-tools.js';
@@ -118,12 +119,14 @@ export class Assistant {
   readonly guests: Guests;
   readonly calendarIntents: CalendarIntents;
   private readonly mcpGrants: McpGrants;
+  private readonly defaults?: AssistantDefaultsCache;
   constructor(readonly config: Config, readonly store: Store, readonly oauth: OAuth, readonly cash: Cash,
     readonly day: Day, readonly calendar: Calendar, private fetcher: Fetch = fetch,
     private audio: Pick<AudioTranscriber, 'transcribe'> = new AudioTranscriber(config), notifications?: Notifications) {
     this.notifications = notifications || new Notifications(config,store,day,cash,calendar);
     this.guests = new Guests(store);
     this.mcpGrants = new McpGrants(store);
+    if (cash.enabled) this.defaults = new AssistantDefaultsCache(cash, store.db);
     this.calendarIntents = new CalendarIntents(store, config.timeZone, (sender, change) => calendar.prepare(sender, change));
   }
 
@@ -273,7 +276,7 @@ export class Assistant {
       return this.cashMessage(message, workspace);
     }
     if (!cashConnected && !dayConnected && !calendarConnected && !connections.cashStatus?.workspaces.length) return [{ text: 'Envie "conexões" para conectar Cash, Day ou Calendar e começar.' }];
-    if (!this.config.ai.key || !this.config.ai.model) throw new PublicError('A interpretação de perguntas no Hub ainda precisa de configuração de IA. As conexões podem ser configuradas normalmente.');
+    if (!this.config.ai.key) throw new PublicError('A interpretação de perguntas no Hub ainda precisa de configuração de IA. As conexões podem ser configuradas normalmente.');
 
     let selectedReminder = editingReminder ? await this.notifications.selection.editContext(message.sender) : null;
     let calendarIntent = calendarConnected ? await this.calendarIntents.pending(message.sender) : null;
@@ -319,12 +322,14 @@ cash_assistant recebe a mensagem original; use sozinha para pedidos financeiros 
     const calendarsSeen = new Set(['primary']);
     const eventsSeen = new Set<string>();
     const remindersSeen = new Set<string>();
+    const { model, reasoningEffort } = this.defaults ? await this.defaults.get()
+      : { model: this.config.ai.model, reasoningEffort: this.config.ai.effort };
     for (let turn = 0; turn < 5; turn++) {
       const response = await jsonRequest(this.fetcher, 'https://api.openai.com/v1/responses', {
         method: 'POST', headers: { Authorization: `Bearer ${this.config.ai.key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.config.ai.model, instructions, input, tools: enabled.map(name => definitions[name]),
+        body: JSON.stringify({ model, instructions, input, tools: enabled.map(name => definitions[name]),
           store: false, max_output_tokens: 1800, parallel_tool_calls: false,
-          ...(this.config.ai.effort ? { reasoning: { effort: this.config.ai.effort } } : {}) })
+          ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}) })
       });
       const output = Array.isArray(response.output) ? response.output : [];
       const requested = output.filter((item: any) => item.type === 'function_call');

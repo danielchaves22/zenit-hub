@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
 import { transaction } from './database.js';
 
-export const schemaVersion = 11;
+export const schemaVersion = 12;
 const initialSchema = `
   CREATE TABLE connections (
     sender TEXT NOT NULL, provider TEXT NOT NULL CHECK (provider IN ('day','calendar')),
@@ -173,6 +173,13 @@ export async function migrate(pool: Pool) {
       CREATE INDEX mcp_tokens_grant ON mcp_tokens(grant_id);
       CREATE INDEX mcp_tokens_expiry ON mcp_tokens(expires);
       INSERT INTO hub_schema_migrations(version) VALUES(11);`);
+    }
+    if (!rows.some(row => row.version === 12)) {
+      await client.query(`CREATE TABLE assistant_defaults_cache (
+        singleton BOOLEAN PRIMARY KEY CHECK (singleton), model TEXT NOT NULL,
+        reasoning_effort TEXT, checked_at BIGINT NOT NULL
+      );
+      INSERT INTO hub_schema_migrations(version) VALUES(12);`);
     }
   });
 }
