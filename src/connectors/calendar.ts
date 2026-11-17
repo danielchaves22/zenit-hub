@@ -10,6 +10,9 @@ export class Calendar {
   private writes: CalendarWrites;
   constructor(private oauth: OAuth, private fetcher: Fetch = fetch) { this.writes = new CalendarWrites(oauth, fetcher); }
   prepare(sender: string, input: unknown) { return this.writes.prepare(sender, input); }
+  prepareFavorite(sender: string, input: unknown) { return this.writes.prepareFavorite(sender, input); }
+  pendingCreation(sender: string) { return this.writes.pendingCreation(sender); }
+  reviseCreation(sender: string, input: unknown, expectedToken?: string) { return this.writes.reviseCreation(sender, input, expectedToken); }
   prepareReschedule(sender: string, input: unknown) { return this.writes.prepareReschedule(sender, input); }
   prepareGuestAddition(sender: string, input: unknown) { return this.writes.prepareGuestAddition(sender, input); }
   confirm(sender: string, token: string, approved: boolean) { return this.writes.confirm(sender, token, approved); }

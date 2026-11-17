@@ -4,26 +4,33 @@ Favoritos pertencem ao usuário do Hub identificado pelo remetente autenticado d
 
 ## Como usar
 
-- `Meus convidados`: lista os favoritos e explica o cadastro, sem usar IA.
+- `Meus convidados`: lista os favoritos e identifica as agendas com convite automático, sem usar IA.
 - `Salve Ana, ana@example.com, como convidada favorita`: prepara o cadastro; confirme pelo botão.
+- `Sempre convide Ana na minha agenda principal`: ativa o convite automático. Revise a conta Google e a agenda e confirme pelo botão.
+- `Cadastre João, joao@example.com, e sempre o convide na agenda principal`: cadastra e prepara a preferência na mesma confirmação.
+- `Pare de convidar Ana automaticamente na agenda principal`: desativa o automático nessa agenda, mantendo o favorito para seleção manual.
 - `Altere o e-mail da favorita Ana para ana.nova@example.com`: revisa e confirma a edição.
 - `Remova a favorita Ana`: revisa e confirma a remoção. Nomes repetidos exigem o e-mail para identificar a pessoa.
 
 Há um limite de 20 favoritos por usuário, sem e-mails duplicados (comparação sem diferenciar maiúsculas). Cadastro e remoção não enviam convites nem alteram eventos anteriores. Desconectar Calendar não apaga os favoritos do Hub.
 
-Ao criar um evento, se houver favoritos, o Hub oferece **Escolher convidados**, **Sem convidados** e **Cancelar**. Sem favoritos, mantém a confirmação normal. Se a pessoa ainda não está cadastrada, cadastre-a antes de criar o evento.
+Ao criar um evento, o Hub inclui os automáticos daquela conta Google e agenda na primeira prévia, mostrando nomes e e-mails. A prévia tem **Confirmar**, **Convidados** e **Cancelar**, inclusive quando a seleção está vazia. **Confirmar** cria exatamente o evento revisado; não é preciso abrir a escolha antes.
 
-Com o Flow publicado/configurado, **Escolher convidados** abre checkboxes dentro do WhatsApp, inicialmente desmarcados. **Revisar evento** devolve a seleção ao Hub. Sem Flow, aparece uma lista numerada com nome e e-mail de cada favorito. O usuário pode responder `1`, `1 e 3`, `1, 2, 3`, nomes (por exemplo, `Ana e João`), e-mails ou `sem convidados`.
+**Convidados** abre a lista para substituir a seleção ou escolher **Sem convidados**. A seleção vazia remove todos do rascunho, inclusive os automáticos, e retorna à prévia para confirmação. Não modifica as preferências dos próximos eventos. É possível reabrir a seleção várias vezes.
+
+As preferências são por remetente, conta Google e ID real da agenda (o alias `primary` é resolvido no Google). Sem indicar outra agenda, a configuração usa a principal e mostra essa escolha antes de confirmar. Agendas diferentes podem ter padrões diferentes; conectar outra conta não transfere as preferências. Eventos criados fora do Hub e eventos já existentes não recebem esses convidados automaticamente.
+
+Com o Flow publicado/configurado e seleção vazia, **Convidados** pode abrir checkboxes dentro do WhatsApp. **Revisar evento** devolve a seleção ao Hub. Sem Flow, ou quando já existem convidados selecionados, aparece uma lista numerada com os favoritos e a seleção atual. O Flow legado inicia desmarcado; não é usado para substituir silenciosamente uma seleção existente. O usuário pode responder `1`, `1 e 3`, `1, 2, 3`, nomes (por exemplo, `Ana e João`), e-mails ou `sem convidados`.
 
 Respostas contendo apenas números separados por vírgula, ponto e vírgula, espaços ou `e` são tratadas diretamente pelo Hub, sem chamada à IA, enquanto o evento aguarda convidados. Os números correspondem à cópia da lista guardada nesse rascunho, não à ordem de contatos inferida pelo modelo. Números fora da lista são rejeitados sem mudar o rascunho; escolhas repetidas são consideradas uma única vez. As opções continuam sujeitas à revisão dos favoritos e ao prazo do evento. Isso não é uma lista interativa de múltipla seleção da Meta: são números enviados como texto na conversa.
 
-Nos dois caminhos, uma nova prévia mostra os e-mails escolhidos; somente **Criar e convidar** grava o evento e solicita ao Google o envio dos convites (`sendUpdates=all`). Não há garantia de entrega do e-mail pela API. A seleção vazia cria sem convidados após **Criar evento**. Texto ou voz nunca substituem o botão final.
+Nos dois caminhos, uma nova prévia mostra os e-mails escolhidos; somente **Confirmar** grava o evento e solicita ao Google o envio dos convites (`sendUpdates=all`). Não há garantia de entrega do e-mail pela API. Com seleção vazia, **Confirmar** cria sem convidados. Texto ou voz nunca substituem o botão final. E-mails explicitamente informados podem ser usados sem cadastrar favoritos; nunca são extraídos automaticamente de documentos ou eventos.
 
 ## Adicionar convidados a eventos existentes
 
 - `Adicione Ana à reunião de amanhã`: consulta o evento e resolve Ana pelos favoritos; nomes ou eventos ambíguos exigem esclarecimento.
 - `Inclua bruno@example.com no Show Crossroads de 23/12/2026`: aceita um e-mail explícito, sem cadastrá-lo automaticamente como favorito.
-- `Quero adicionar convidados à reunião de amanhã`: identifica o evento e abre a escolha. Toque em **Escolher convidados** para ver a lista e responder, por exemplo, `1 e 3`.
+- `Quero adicionar convidados à reunião de amanhã`: identifica o evento e abre a escolha. Toque em **Convidados** para ver a lista e responder, por exemplo, `1 e 3`.
 
 A prévia identifica o evento, a data, a agenda, os participantes atuais e os novos convidados. Somente **Adicionar e convidar** aplica a inclusão. E-mails já presentes são ignorados sem diferenciar maiúsculas; se todos já participam, nenhum convite é enviado e o Hub pede outra seleção ou cancelamento. Seleção vazia/`sem convidados` cancela a inclusão, sem remover participantes.
 
@@ -35,7 +42,11 @@ Nesta etapa, a inclusão é permitida somente na cópia da agenda organizadora, 
 
 A migração 4 adiciona `guest_favorites` (uma coleção cifrada por remetente, com revisão) e `guest_favorite_drafts` (confirmações cifradas de gestão). Usa AES-256-GCM com o `HUB_ENCRYPTION_KEY` existente, contexto vinculado ao dono, consultas parametrizadas e transações curtas. Nenhuma chamada externa é feita mantendo locks de favoritos.
 
-O rascunho Calendar guarda uma cópia cifrada dos favoritos exibidos e sua revisão. Escolher convidados substitui atomicamente o token anterior por outro de confirmação, preservando o prazo original de dez minutos e o ID do evento. Confirmar um rascunho que ainda aguarda convidados é bloqueado também no servidor. Tokens são vinculados ao remetente e à autorização Calendar; expiração, substituição, desconexão e reconexão invalidam a seleção. Se os favoritos mudarem antes da seleção, é necessário preparar novamente. A prévia final mantém exatamente os e-mails revisados, mesmo se o cadastro mudar depois.
+As preferências automáticas usam o campo opcional `automatic` na coleção cifrada de favoritos: `{accountId, calendarId, label, accountLabel}[]`. Favoritos antigos sem esse campo continuam manuais; não é necessária migração de schema nem alteração na Meta. `guest_favorite_prepare` recebe `automatic` (true/false/null) e `calendarId`. O servidor valida a conta e a permissão da agenda antes de preparar a confirmação.
+
+O rascunho Calendar guarda uma cópia cifrada dos favoritos exibidos e sua revisão. Abrir e concluir a seleção substitui atomicamente o token anterior, preservando o prazo original de dez minutos e o ID do evento. `calendar_revise_draft` corrige uma prévia de criação sem reiniciar o prazo ou recalcular convidados. A seleção explícita, inclusive vazia, prevalece sobre os padrões durante todo o rascunho. Um novo pedido independente aplica novamente os padrões.
+
+Confirmar um rascunho que ainda aguarda convidados é bloqueado também no servidor. Tokens são vinculados ao remetente e à autorização Calendar; expiração, substituição, desconexão e reconexão invalidam a seleção. Se os favoritos mudarem antes da seleção, é necessário preparar novamente. A prévia final mantém exatamente os e-mails revisados, mesmo se o cadastro mudar depois.
 
 Respostas `interactive.nfm_reply.response_json` passam pela assinatura do webhook e aceitam somente `flow_token` e até 20 UUIDs únicos em `guest_ids`. E-mails e nomes vêm do rascunho do servidor. Nenhum conteúdo do formulário é interpretado como comando da IA. Histórico e filas continuam cifrados. Rascunhos expirados são removidos após 30 dias; favoritos ficam até remoção pelo usuário.
 

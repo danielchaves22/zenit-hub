@@ -84,7 +84,7 @@ export class WhatsApp {
         flow.favorites.some(f => !z.string().uuid().safeParse(f.id).success || !f.title.trim() || f.title.length > 30 || f.description.length > 300)) throw new Error('Invalid guest Flow');
       await this.post(sender, { type: 'interactive', interactive: { type: 'flow', body: { text: reply.text }, action: { name: 'flow', parameters: {
         flow_message_version: '3', flow_id: this.config.meta.guestsFlowId, flow_token: flow.token,
-        flow_cta: 'Escolher convidados', flow_action: 'navigate', flow_action_payload: { screen: 'GUESTS', data: { favorites: flow.favorites } }
+        flow_cta: 'Convidados', flow_action: 'navigate', flow_action_payload: { screen: 'GUESTS', data: { favorites: flow.favorites } }
       } } } });
       return;
     }

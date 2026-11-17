@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { OAuth } from '../oauth.js';
 import { digest, randomToken } from '../security.js';
 import { PublicError, type Connection, type Fetch, type Reply } from '../types.js';
-import { Guests, resolveFavorite, type Favorite } from '../guests.js';
+import { Guests, favoriteChange, isAutomatic, resolveFavorite, type Favorite } from '../guests.js';
 import { rescheduleEvent } from '../calendar-reschedule.js';
 
 const calendarId = z.string().min(1).max(512);
@@ -22,6 +22,8 @@ export const eventChange = z.object({
   timingEvidence: z.string().max(1000).nullable(),
   reminderMinutes: z.array(z.number().int().min(0).max(40320)).max(5).nullable()
 }).strict();
+export const eventDraftRevision = eventChange.pick({ title: true, description: true, location: true,
+  start: true, end: true, allDay: true, timingEvidence: true, reminderMinutes: true });
 type EventTime = { date?: string | null; dateTime?: string | null; timeZone?: string | null };
 type Attendee = { email?: string; displayName?: string; responseStatus?: string; optional?: boolean;
   resource?: boolean; comment?: string; additionalGuests?: number; asyncOperation?: string; [key: string]: unknown };
@@ -32,7 +34,8 @@ type Event = { id: string; etag: string; summary?: string; description?: string;
 type Patch = Partial<Pick<Event, 'summary' | 'description' | 'location' | 'start' | 'end' | 'reminders' | 'attendees'>>;
 type Draft = { operation: 'create' | 'update' | 'delete'; accountId: string; grant: string;
   calendarId: string; eventId: string; etag?: string; patch: Patch; preview: string;
-  guests?: { stage: 'choose' | 'review'; token: string; revision: number; favorites: Favorite[]; existingAttendees?: Attendee[] } };
+  guests?: { stage: 'choose' | 'review'; token: string; revision: number; favorites: Favorite[];
+    basePreview?: string; automatic?: boolean; existingAttendees?: Attendee[] } };
 class CalendarError extends PublicError {
   constructor(readonly status: number) {
     super(status === 412 ? 'O evento mudou no Google depois da prévia. Consulte novamente e revise uma nova confirmação.'
@@ -94,14 +97,53 @@ export class CalendarWrites {
     return this.prepareChange(sender, { operation: 'update', calendarId: q.calendarId, eventId: q.eventId,
       title: null, description: null, location: null, start: null, end: null, allDay: null, timingEvidence: null, reminderMinutes: null }, false, q.date);
   }
+  async prepareFavorite(sender: string, input: unknown): Promise<Reply> {
+    const q = favoriteChange.parse(input);
+    if (q.automatic === null) return new Guests(this.oauth.store).prepare(sender, q);
+    const c = await this.writable(sender);
+    const cal = await this.request(c, `/users/me/calendarList/${encodeURIComponent(q.calendarId || 'primary')}`);
+    if (!['owner', 'writer'].includes(cal.accessRole)) throw new PublicError('Escolha uma agenda com permissão de edição.');
+    return new Guests(this.oauth.store).prepare(sender, q, { accountId: c.accountId,
+      calendarId: calendarId.parse(cal.id), label: plain(cal.summary || cal.id), accountLabel: plain(c.label) });
+  }
+  async pendingCreation(sender: string) {
+    const pending = await this.oauth.store.pendingCalendarDraft<Draft>(sender);
+    return pending?.data.operation === 'create' && pending.data.guests ? pending.data : null;
+  }
+  async reviseCreation(sender: string, input: unknown, expectedToken?: string): Promise<Reply> {
+    const q = eventDraftRevision.parse(input);
+    const draft = await this.pendingCreation(sender);
+    if (!draft || (expectedToken && expectedToken !== draft.guests!.token)) throw new PublicError('Não há prévia de criação ativa. Faça um novo pedido de evento.');
+    const p = draft.patch;
+    if (Object.entries(q).every(([key, v]) => key === 'timingEvidence' || v === null))
+      throw new PublicError('Informe o que deseja corrigir no rascunho.');
+    return this.prepareChange(sender, { ...q, operation: 'create', calendarId: draft.calendarId, eventId: null,
+      title: q.title ?? p.summary, description: q.description ?? p.description ?? null, location: q.location ?? p.location ?? null,
+      start: q.start ?? p.start?.dateTime ?? p.start?.date, end: q.end ?? p.end?.dateTime ?? p.end?.date,
+      allDay: q.allDay ?? !!p.start?.date, reminderMinutes: q.reminderMinutes ??
+        (p.reminders?.useDefault === false ? (p.reminders.overrides || []).map(r => r.minutes) : null) }, false, undefined, draft);
+  }
+  private creationReply(draft: Draft): Reply {
+    const token = draft.guests!.token;
+    return { text: draft.preview, buttons: [{ id: `hub:calendar:confirm:${token}`, title: 'Confirmar' },
+      { id: `hub:calendar:guests:${token}`, title: 'Convidados' }, { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }] };
+  }
+  private creationPreview(base: string, guests: Favorite[], automatic: boolean) {
+    const preview = `${base}\n\n${automatic && guests.length ? 'Convidados incluídos automaticamente' : 'Convidados'}: ${guests.length
+      ? '\n' + guests.map(f => `• ${f.name} — ${f.email}`).join('\n') + '\nO Google enviará os convites somente após você confirmar.' : 'nenhum.'}`;
+    if (preview.length > 7000) throw new PublicError('A prévia ficou grande demais. Reduza os detalhes ou os convidados.');
+    return preview;
+  }
   async prepareGuestAddition(sender: string, input: unknown): Promise<Reply> {
     const q = eventGuestAddition.parse(input);
     const reply = await this.prepareChange(sender, { operation: 'update', calendarId: q.calendarId, eventId: q.eventId,
       title: null, description: null, location: null, start: null, end: null, allDay: null, timingEvidence: null, reminderMinutes: null }, true);
     return q.names === null ? reply : this.selectGuestNames(sender, q.names);
   }
-  private async prepareChange(sender: string, input: unknown, addGuests = false, newDate?: string): Promise<Reply> {
+  private async prepareChange(sender: string, input: unknown, addGuests = false, newDate?: string, revising?: Draft): Promise<Reply> {
     const q = eventChange.parse(input); const c = await this.writable(sender);
+    if (revising && (revising.accountId !== c.accountId || revising.grant !== grant(c)))
+      throw new PublicError('A conexão do Calendar mudou. Prepare o evento novamente.');
     const calendar = await this.request(c, `/users/me/calendarList/${encodeURIComponent(q.calendarId)}`);
     if (!['owner', 'writer'].includes(calendar.accessRole)) throw new PublicError('Sua conta só pode consultar esta agenda. Escolha uma agenda com permissão de edição.');
     const target = calendarId.parse(calendar.id); const path = `/calendars/${encodeURIComponent(target)}/events`;
@@ -159,27 +201,35 @@ export class CalendarWrites {
     if (preview.length > 7000) throw new PublicError('O evento tem detalhes demais para revisar no WhatsApp. Faça a alteração diretamente no Google Calendar.');
     const token = randomToken();
     const draft: Draft = { operation: q.operation, accountId: c.accountId, grant: grant(c), calendarId: target,
-      eventId: q.eventId || randomUUID().replaceAll('-', ''), etag: before?.etag, patch, preview };
+      eventId: revising?.eventId || q.eventId || randomUUID().replaceAll('-', ''), etag: before?.etag, patch, preview };
     if (q.operation === 'create' || addGuests) {
       const favorites = await new Guests(this.oauth.store).list(sender);
-      if (favorites.items.length || addGuests) draft.guests = { stage: 'choose', token, revision: favorites.revision, favorites: favorites.items,
-        ...(addGuests ? { existingAttendees: before!.attendees || [] } : {}) };
+      if (addGuests) draft.guests = { stage: 'choose', token, revision: favorites.revision, favorites: favorites.items,
+        existingAttendees: before!.attendees || [] };
+      else {
+        draft.guests = { stage: 'review', token, revision: favorites.revision, favorites: favorites.items, automatic: true,
+          ...revising?.guests, basePreview: preview };
+        draft.guests.token = token;
+        draft.guests.stage = 'review';
+        patch.attendees = revising ? revising.patch.attendees || [] :
+          favorites.items.filter(f => isAutomatic(f, c.accountId, target)).map(f => ({ email: f.email }));
+        const selected = patch.attendees.map(a => draft.guests!.favorites.find(f => f.email === a.email) ||
+          { id: randomUUID(), name: a.displayName || a.email!, email: a.email! });
+        draft.preview = this.creationPreview(preview, selected, !!draft.guests.automatic);
+      }
     }
-    await this.oauth.store.calendarDraft(sender, token, draft);
+    if (revising) await this.oauth.store.replaceCalendarDraft<Draft>(sender, revising.guests!.token, token, () => draft);
+    else await this.oauth.store.calendarDraft(sender, token, draft);
     if (addGuests) return { text: `${preview}\n\nEscolha os favoritos ou informe os e-mails que deseja adicionar. Os participantes atuais serão mantidos.`, buttons: [
-      ...(draft.guests!.favorites.length ? [{ id: `hub:calendar:guests:${token}`, title: 'Escolher convidados' }] : []),
+      ...(draft.guests!.favorites.length ? [{ id: `hub:calendar:guests:${token}`, title: 'Convidados' }] : []),
       { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }
     ] };
-    if (draft.guests) return { text: `${preview}\n\nDeseja adicionar convidados favoritos? Escolha antes de confirmar a criação.`, buttons: [
-      { id: `hub:calendar:guests:${token}`, title: 'Escolher convidados' },
-      { id: `hub:calendar:none:${token}`, title: 'Sem convidados' },
-      { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }
-    ] };
+    if (q.operation === 'create') return this.creationReply(draft);
     return { text: preview, buttons: [{ id: `hub:calendar:confirm:${token}`, title: 'Confirmar' }, { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }] };
   }
-  private async choosing(sender: string, token?: string) {
+  private async choosing(sender: string, token?: string, allowReview = false) {
     const pending = await this.oauth.store.pendingCalendarDraft<Draft>(sender, token);
-    if (!pending?.data.guests || pending.data.guests.stage !== 'choose') throw new PublicError('A seleção expirou ou já foi concluída/substituída. Faça um novo pedido de evento.');
+    if (!pending?.data.guests || (pending.data.guests.stage !== 'choose' && !allowReview)) throw new PublicError('A seleção expirou ou já foi concluída/substituída. Faça um novo pedido de evento.');
     const draft = pending.data; const c = await this.writable(sender);
     if (c.accountId !== draft.accountId || grant(c) !== draft.grant) throw new PublicError('A conexão do Calendar mudou. Faça o pedido novamente.');
     const favorites = await new Guests(this.oauth.store).list(sender);
@@ -187,23 +237,36 @@ export class CalendarWrites {
     return draft;
   }
   async openGuests(sender: string, token: string): Promise<Reply> {
-    const draft = await this.choosing(sender, token); const favorites = draft.guests!.favorites;
+    let draft = await this.choosing(sender, token, true);
+    // Opening the editor invalidates the old confirmation. Never confirm a stale guest list.
+    if (draft.guests!.stage === 'review') {
+      const nextToken = randomToken();
+      const next: Draft = { ...draft, guests: { ...draft.guests!, token: nextToken, stage: 'choose' } };
+      try { await this.oauth.store.replaceCalendarDraft<Draft>(sender, token, nextToken, () => next); }
+      catch { throw new PublicError('A seleção expirou ou foi substituída. Abra a prévia atual.'); }
+      token = nextToken; draft = next;
+    }
+    const favorites = draft.guests!.favorites;
     const adding = draft.guests!.existingAttendees !== undefined;
-    if (!this.oauth.config.meta.guestsFlowId || !favorites.length) return { text: `Convidados favoritos\n${favorites.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n') || 'Nenhum favorito cadastrado.'}\n\nResponda com os números (por exemplo, "1", "1 e 3" ou "1, 2, 3"), nomes ou e-mails desejados, ou "sem convidados". Depois você revisará o evento antes de ${adding ? 'adicionar e enviar os convites. Os participantes atuais serão mantidos; você também pode informar um e-mail não cadastrado' : 'criar e enviar os convites'}.`,
+    const selected = !adding ? draft.patch.attendees || [] : [];
+    // Published legacy Flows start unchecked. Use the numbered editor when there
+    // is a selection so opening it cannot silently discard automatic guests.
+    if (!this.oauth.config.meta.guestsFlowId || !favorites.length || selected.length) return { text: `Convidados favoritos\n${favorites.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n') || 'Nenhum favorito cadastrado.'}${!adding ? '\n\nSeleção atual: ' + (selected.map(a => a.email).join(', ') || 'ninguém.') : ''}\n\nResponda com os números (por exemplo, "1", "1 e 3" ou "1, 2, 3"), nomes ou e-mails desejados, ou "sem convidados". A nova seleção substitui a anterior neste rascunho. Depois você revisará o evento antes de ${adding ? 'adicionar e enviar os convites. Os participantes atuais serão mantidos; você também pode informar um e-mail não cadastrado' : 'criar e enviar os convites'}.`,
       buttons: [...(!adding ? [{ id: `hub:calendar:none:${token}`, title: 'Sem convidados' }] : []), { id: `hub:calendar:cancel:${token}`, title: 'Cancelar' }] };
     return { text: `Marque os convidados deste evento. Ao continuar, você receberá uma prévia para confirmar ${adding ? 'a inclusão e os convites. Os participantes atuais serão mantidos' : 'a criação e os convites'}. Nenhum favorito vem marcado. ${adding ? 'Continuar sem marcar opções cancela esta inclusão.' : 'Para não convidar ninguém, continue sem marcar opções.'}`,
       flow: { token, favorites: favorites.map((f, i) => ({ id: f.id, title: `${i + 1}. ${f.name}`.slice(0, 30), description: f.email })) } };
   }
   async selectGuestNames(sender: string, input: unknown): Promise<Reply> {
     const names = z.array(z.string().trim().min(1).max(254)).max(20).parse(input);
-    const draft = await this.choosing(sender);
+    const draft = await this.choosing(sender, undefined, true);
     const favorites = draft.guests!.favorites;
     const selected = names.map(n => {
-      if (draft.guests!.existingAttendees !== undefined && z.string().email().safeParse(n).success) {
+      if (z.string().email().safeParse(n).success) {
         const email = n.toLowerCase();
         return favorites.find(f => f.email.toLowerCase() === email) || { id: randomUUID(), name: email, email };
       }
       if (!/^\d+$/.test(n)) return resolveFavorite(favorites, n);
+      if (draft.guests!.stage !== 'choose') throw new PublicError('Abra Convidados antes de escolher pelos números da lista.');
       const index = Number(n) - 1;
       if (!Number.isSafeInteger(index) || index < 0 || index >= favorites.length) throw new PublicError(`Escolha números de 1 a ${favorites.length}, conforme a lista deste evento, ou envie "sem convidados".`);
       return favorites[index];
@@ -218,7 +281,7 @@ export class CalendarWrites {
   async selectGuests(sender: string, token: string, input: unknown): Promise<Reply> {
     const ids = z.array(z.string().uuid()).max(20).parse(input);
     if (new Set(ids).size !== ids.length) throw new PublicError('Seleção duplicada. Escolha os convidados novamente.');
-    const draft = await this.choosing(sender, token); const guests = draft.guests!;
+    const draft = await this.choosing(sender, token, ids.length === 0); const guests = draft.guests!;
     const selected = ids.map(id => {
       const f = guests.favorites.find(f => f.id === id);
       if (!f) throw new PublicError('Convidado inválido para este pedido. Abra a seleção novamente.');
@@ -235,18 +298,20 @@ export class CalendarWrites {
     const additions = selected.filter(f => !emails.has(f.email.toLowerCase()));
     if (adding && !additions.length) throw new PublicError('Esses e-mails já participam do evento. Escolha outros convidados ou cancele a inclusão. Nenhum convite foi enviado.');
     const nextToken = randomToken();
-    const preview = `${draft.preview}\n\n${adding ? 'Novos convidados' : 'Convidados'}: ${additions.length ? '\n' + additions.map(f => `• ${f.name} — ${f.email}`).join('\n') : 'nenhum.'}${additions.length ? (adding ? '\nAo confirmar, o Google adicionará estes e-mails e enviará os convites. Os participantes atuais e suas respostas serão preservados; eles também poderão receber uma atualização.' : '\nAo confirmar, o Google criará o evento e enviará os convites para estes e-mails.') : ''}${adding && additions.length < selected.length ? '\nE-mails que já participam não serão adicionados novamente.' : ''}`;
+    const preview = adding ? `${draft.preview}\n\nNovos convidados: ${additions.length ? '\n' + additions.map(f => `• ${f.name} — ${f.email}`).join('\n') : 'nenhum.'}\nAo confirmar, o Google adicionará estes e-mails e enviará os convites. Os participantes atuais e suas respostas serão preservados; eles também poderão receber uma atualização.${additions.length < selected.length ? '\nE-mails que já participam não serão adicionados novamente.' : ''}`
+      : this.creationPreview(guests.basePreview || draft.preview, additions, false);
     if (preview.length > 7000) throw new PublicError('A lista de convidados ficou grande demais para revisar no WhatsApp. Escolha menos convidados ou use o Google Calendar.');
     try {
       await this.oauth.store.replaceCalendarDraft<Draft>(sender, token, nextToken, current => {
-        if (current.guests?.stage !== 'choose') throw new Error('Not selecting');
-        return { ...current, guests: { ...guests, token: nextToken, stage: 'review' }, preview,
+        if (current.guests?.stage !== guests.stage) throw new Error('Selection changed');
+        return { ...current, guests: { ...guests, token: nextToken, stage: 'review', automatic: false }, preview,
           // Google replaces arrays on PATCH. Keep the complete attendee objects,
           // including RSVP/optional/resource metadata, guarded by the original ETag.
           patch: { ...current.patch, attendees: [...existing, ...additions.map(f => ({ email: f.email }))] } };
       });
     } catch { throw new PublicError('A seleção expirou ou foi substituída. Faça o pedido novamente.'); }
-    return { text: preview, buttons: [{ id: `hub:calendar:confirm:${nextToken}`, title: adding ? 'Adicionar e convidar' : selected.length ? 'Criar e convidar' : 'Criar evento' }, { id: `hub:calendar:cancel:${nextToken}`, title: 'Cancelar' }] };
+    if (!adding) return this.creationReply({ ...draft, preview, guests: { ...guests, token: nextToken, stage: 'review' } });
+    return { text: preview, buttons: [{ id: `hub:calendar:confirm:${nextToken}`, title: 'Adicionar e convidar' }, { id: `hub:calendar:cancel:${nextToken}`, title: 'Cancelar' }] };
   }
   async confirm(sender: string, token: string, approved: boolean): Promise<Reply> {
     const store = this.oauth.store;

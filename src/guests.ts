@@ -5,13 +5,18 @@ import { digest, randomToken } from './security.js';
 import { Store } from './store.js';
 import { PublicError, type Reply } from './types.js';
 
-export type Favorite = { id: string; name: string; email: string };
+export type AutomaticAgenda = { accountId: string; calendarId: string; label: string; accountLabel: string };
+export type Favorite = { id: string; name: string; email: string; automatic?: AutomaticAgenda[] };
+export function isAutomatic(f: Favorite, accountId: string, calendarId: string) {
+  return f.automatic?.some(a => a.accountId === accountId && a.calendarId === calendarId) ?? false;
+}
 type Collection = { revision: number; items: Favorite[] };
 type Change = { revision: number; items: Favorite[] };
 const name = z.string().trim().min(1).max(60).regex(/^[^\p{Cc}]+$/u);
 const email = z.string().trim().toLowerCase().email().max(254);
 export const favoriteChange = z.object({ operation: z.enum(['add', 'update', 'remove']),
-  target: z.string().trim().min(1).max(254).nullable(), name: name.nullable(), email: email.nullable() }).strict();
+  target: z.string().trim().min(1).max(254).nullable(), name: name.nullable(), email: email.nullable(),
+  automatic: z.boolean().nullable().default(null), calendarId: z.string().min(1).max(512).nullable().default(null) }).strict();
 const normalize = (s: string) => s.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 export function resolveFavorite(items: Favorite[], target: string) {
   const found = items.filter(f => normalize(f.name) === normalize(target) || f.email === target.trim().toLowerCase());
@@ -34,10 +39,12 @@ export class Guests {
   }
   async listing(sender: string): Promise<Reply> {
     const { items } = await this.list(sender);
-    return { text: `Convidados favoritos do Hub${items.length ? '\n' + items.map((f, i) => `${i + 1}. ${f.name} — ${f.email}`).join('\n') : '\nVocê ainda não tem favoritos.'}\n\nPara cadastrar: "Salve Ana, ana@example.com, como convidada favorita". Você também pode pedir para alterar ou remover um favorito. Até 20 favoritos; nenhum convite é enviado ao cadastrar.` };
+    return { text: `Convidados favoritos do Hub${items.length ? '\n' + items.map((f, i) => `${i + 1}. ${f.name} — ${f.email}${f.automatic?.length ? '\n   Automático em: ' + f.automatic.map(a => `${a.label} (${a.accountLabel})`).join('; ') : '\n   Convite manual'}`).join('\n') : '\nVocê ainda não tem favoritos.'}\n\nPara cadastrar: "Salve Ana, ana@example.com, como convidada favorita". Para convidar automaticamente: "Sempre convide Ana na minha agenda principal". Para parar, mantendo o favorito: "Pare de convidar Ana automaticamente na agenda principal". Você também pode pedir para alterar ou remover um favorito. Até 20 favoritos; nenhum convite é enviado ao cadastrar.` };
   }
-  async prepare(sender: string, input: unknown): Promise<Reply> {
+  async prepare(sender: string, input: unknown, agenda?: AutomaticAgenda): Promise<Reply> {
     const q = favoriteChange.parse(input); const current = await this.list(sender);
+    if (q.automatic !== null && (!agenda || q.operation === 'remove')) throw new PublicError('Conecte o Calendar e identifique a agenda para configurar os convites automáticos.');
+    if (q.calendarId !== null && q.automatic === null) throw new PublicError('Informe se deseja ativar ou desativar o convite automático nessa agenda.');
     const items = [...current.items]; let selected: Favorite;
     if (q.operation === 'add') {
       if (q.target !== null || !q.name || !q.email) throw new PublicError('Informe nome e e-mail do novo favorito.');
@@ -50,9 +57,16 @@ export class Guests {
         if (q.name !== null || q.email !== null) throw new PublicError('Para remover, informe somente o favorito.');
         selected = old; items.splice(index, 1);
       } else {
-        if (!q.name && !q.email) throw new PublicError('Informe o novo nome ou e-mail.');
+        if (!q.name && !q.email && q.automatic === null) throw new PublicError('Informe o novo nome, e-mail ou a preferência de convite automático.');
         selected = { ...old, name: q.name ?? old.name, email: q.email ?? old.email }; items[index] = selected;
       }
+    }
+    if (q.automatic !== null) {
+      const automatic = (selected.automatic || []).filter(a => a.accountId !== agenda!.accountId || a.calendarId !== agenda!.calendarId);
+      if (q.automatic) automatic.push(agenda!);
+      if (automatic.length > 100) throw new PublicError('Limite de agendas automáticas atingido para este favorito.');
+      selected = { ...selected, automatic };
+      items[items.findIndex(f => f.id === selected.id)] = selected;
     }
     if (new Set(items.map(f => f.email)).size !== items.length) throw new PublicError('Este e-mail já está nos seus favoritos.');
     const token = randomToken(); const hash = digest(token);
@@ -65,7 +79,7 @@ export class Guests {
       await tx.query('INSERT INTO guest_favorite_drafts(hash,sender,data,expires) VALUES($1,$2,$3,$4)',
         [hash, sender, this.store.vault.seal({ revision: current.revision, items } satisfies Change, `guest-draft:${hash}:${sender}`), Date.now() + 600_000]);
     });
-    return { text: `${q.operation === 'add' ? 'Adicionar' : q.operation === 'update' ? 'Alterar' : 'Remover'} favorito do Hub\n${selected.name} — ${selected.email}\n\nIsso não altera eventos existentes nem envia convites. Confirme em até 10 minutos.`,
+    return { text: `${q.operation === 'add' ? 'Adicionar' : q.operation === 'update' ? 'Alterar' : 'Remover'} favorito do Hub\n${selected.name} — ${selected.email}${q.automatic === null ? '' : `\nConvite automático: ${q.automatic ? 'ativar' : 'desativar'}\nAgenda: ${agenda!.label}\nConta Google: ${agenda!.accountLabel}`}\n\nIsso não altera eventos existentes nem envia convites. Confirme em até 10 minutos.`,
       buttons: [{ id: `hub:favorite:confirm:${token}`, title: 'Confirmar' }, { id: `hub:favorite:cancel:${token}`, title: 'Cancelar' }] };
   }
   async confirm(sender: string, token: string, approved: boolean): Promise<Reply> {

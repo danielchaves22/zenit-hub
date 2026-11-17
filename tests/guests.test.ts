@@ -75,15 +75,17 @@ test('guest choice cannot create an event; owner-bound final preview sends exact
   try {
     await add('Ana', 'ana@example.com'); await add('João', 'joao@example.com');
     const first = await calendar.prepare('alice', create); const old = token(first);
-    await assert.rejects(calendar.confirm('alice', old, true), /Escolha os convidados/);
     const flow = await calendar.openGuests('alice', old); assert.equal(flow.flow?.favorites.length, 2); assert.equal(writes.length, 0);
+    const choosingToken = flow.flow!.token;
+    await assert.rejects(calendar.confirm('alice', old, true));
+    await assert.rejects(calendar.confirm('alice', choosingToken, true), /Escolha os convidados/);
     const ids = (await guests.list('alice')).items.map(f => f.id);
     await assert.rejects(calendar.selectGuests('bob', old, ids));
-    await assert.rejects(calendar.selectGuests('alice', old, [randomUUID()]), /inválido/);
-    await assert.rejects(calendar.selectGuests('alice', old, [ids[0], ids[0]]), /duplicada/);
-    const final = await calendar.selectGuests('alice', old, [ids[1]]);
+    await assert.rejects(calendar.selectGuests('alice', choosingToken, [randomUUID()]), /inválido/);
+    await assert.rejects(calendar.selectGuests('alice', choosingToken, [ids[0], ids[0]]), /duplicada/);
+    const final = await calendar.selectGuests('alice', choosingToken, [ids[1]]);
     assert.match(final.text, /joao@example.com/); assert(!final.text.includes('ana@example.com'));
-    assert.equal(writes.length, 0); assert.equal(final.buttons?.[0].title, 'Criar e convidar');
+    assert.equal(writes.length, 0); assert.equal(final.buttons?.[0].title, 'Confirmar');
     await assert.rejects(calendar.selectGuests('alice', old, ids)); await assert.rejects(calendar.confirm('alice', old, true));
     await Promise.all([calendar.confirm('alice', token(final), true), calendar.confirm('alice', token(final), true)]);
     assert.equal(writes.length, 1); assert(writes[0].url.endsWith('?sendUpdates=all'));
@@ -130,7 +132,7 @@ test('Flow webhook is bounded and signed; structured selection bypasses both mod
       metadata: { phone_number_id: '1234' }, messages: [{ id: 'wamid.flow', from: 'alice', type: 'interactive', timestamp: Math.floor(Date.now() / 1000),
         interactive: { nfm_reply: { response_json: JSON.stringify(response) }, ...interactiveExtra } }]
     } }] }] }));
-    const whatsapp = new WhatsApp(config); const response = { flow_token: token(draft), guest_ids: ids };
+    const whatsapp = new WhatsApp(config); const response = { flow_token: (await calendar.openGuests('alice', token(draft))).flow!.token, guest_ids: ids };
     const body = envelope(response); assert.throws(() => whatsapp.parse(body, 'bad'));
     const [incoming] = whatsapp.parse(body, metaSignature(body, config.meta.secret)); assert.equal(incoming.text, '');
     for (const invalid of [envelope({ ...response, guest_ids: [...ids, ...ids] }), envelope({ ...response, email: 'evil@example.com' }), envelope({ ...response, flow_token: 'bad' }), envelope(response, { button_reply: { id: 'zenit:confirm:1' } })]) {
@@ -173,7 +175,7 @@ test('natural-language favorite management and guest choice use Hub tools and pr
     assert.equal((await guests.list('alice')).items.length, 0);
     await assistant.handle({ ...message, text: '', button: r.buttons![0].id });
     [r] = await assistant.handle({ ...message, text: 'Crie Reunião em 23/12/2026 das 14h às 17h' });
-    assert.match(r.text, /Deseja adicionar convidados/);
+    assert.match(r.text, /Convidados: nenhum/);
     [r] = await assistant.handle({ ...message, text: 'Ana' });
     assert.match(r.text, /ana@example.com/); assert.equal(writes.length, 0);
     await assistant.handle({ ...message, text: '', button: r.buttons![0].id });
@@ -190,14 +192,14 @@ test('numbered chat choice selects exactly the listed guests without AI and stil
     const message = { id: 'wamid.numbers', sender: 'alice', text: '', timestamp: Date.now() / 1000 };
     for (const answer of ['1 e 3', '1, 3', '1;3', '1 3']) {
       const draft = await calendar.prepare('alice', create);
-      const [list] = await assistant.handle({ ...message, button: draft.buttons![0].id });
+      const [list] = await assistant.handle({ ...message, button: draft.buttons![1].id });
       assert.match(list.text, /1\. Ana — ana@example.com\n2\. Bruno — bruno@example.com\n3\. João — joao@example.com/);
       const [preview] = await assistant.handle({ ...message, text: answer });
       assert.match(preview.text, /ana@example.com/); assert.match(preview.text, /joao@example.com/);
       assert(!preview.text.includes('bruno@example.com')); assert.equal(writes.length, 0);
-      await assistant.handle({ ...message, button: preview.buttons![1].id });
+      await assistant.handle({ ...message, button: preview.buttons![2].id });
     }
-    await calendar.prepare('alice', create);
+    await calendar.openGuests('alice', token(await calendar.prepare('alice', create)));
     const [preview] = await assistant.handle({ ...message, text: '2' });
     assert.match(preview.text, /bruno@example.com/); assert.equal(writes.length, 0);
     await assistant.handle({ ...message, button: preview.buttons![0].id });
@@ -210,7 +212,7 @@ test('number selection validates snapshot, range, duplicates and sender before p
   try {
     await add('Ana', 'one@example.com'); await add('Ana', 'two@example.com');
     assert.equal(await calendar.tryGuestNumbers('alice', ['1']), null);
-    await calendar.prepare('alice', create);
+    await calendar.openGuests('alice', token(await calendar.prepare('alice', create)));
     assert.equal(await calendar.tryGuestNumbers('bob', ['1']), null);
     for (const numbers of [['0'], ['3'], ['1', '3'], ['99999999999999999999999']]) {
       await assert.rejects(calendar.tryGuestNumbers('alice', numbers), /Escolha números de 1 a 2/);
@@ -221,7 +223,7 @@ test('number selection validates snapshot, range, duplicates and sender before p
     assert.equal(await calendar.tryGuestNumbers('alice', ['1']), null);
     await calendar.confirm('alice', token(valid), true);
     assert.deepEqual(JSON.parse(writes[0].body).attendees, [{ email: 'two@example.com' }]);
-    await calendar.prepare('alice', create); await add('Terceira', 'third@example.com');
+    await calendar.openGuests('alice', token(await calendar.prepare('alice', create))); await add('Terceira', 'third@example.com');
     await assert.rejects(calendar.tryGuestNumbers('alice', ['1']), /favoritos mudaram/);
     assert.equal(writes.length, 1);
   } finally { await store.close(); }
