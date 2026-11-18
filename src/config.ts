@@ -21,10 +21,6 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   if (dayUrl && (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/.test(dayUrl) || !dayKey.startsWith('sb_publishable_'))) {
     throw new Error('O Day exige URL Supabase e chave publicável; chaves administrativas não são aceitas.');
   }
-  const cashUrl = optionalOrigin('CASH_API_URL');
-  const cashSecret = env.CASH_HUB_SHARED_SECRET || '';
-  // An installation without a bridge may still select its own chat model.
-  const standaloneModel = cashUrl && cashSecret.length >= 32 ? undefined : env.OPENAI_MODEL?.trim();
   return {
     host: z.enum(['127.0.0.1', '0.0.0.0', '::1', '::']).parse(env.HUB_HOST || '127.0.0.1'),
     port: z.coerce.number().int().min(1).max(65535).parse(env.PORT || 3210),
@@ -35,12 +31,10 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
       phoneId: env.WHATSAPP_PHONE_NUMBER_ID || '', token: env.WHATSAPP_ACCESS_TOKEN || '',
       guestsFlowId: z.string().regex(/^\d{1,128}$/).optional().parse(env.WHATSAPP_GUESTS_FLOW_ID || undefined),
       secret: env.WHATSAPP_APP_SECRET || '', verify: env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '' },
-    cash: { url: cashUrl, secret: cashSecret,
+    cash: { url: optionalOrigin('CASH_API_URL'), secret: env.CASH_HUB_SHARED_SECRET || '',
       bindingPrefix: env.CASH_BINDING_PREFIX || 'VINCULAR ZENIT', connectUrl: env.CASH_CONNECT_URL || '' },
-    ai: { key: env.OPENAI_API_KEY || '', model: standaloneModel || initialAssistantDefaults.model,
-      transcriptionModel: env.WHATSAPP_TRANSCRIPTION_MODEL?.trim() || 'gpt-transcribe',
-      effort: standaloneModel ? z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
-        .optional().parse(env.OPENAI_REASONING_EFFORT || undefined) : initialAssistantDefaults.reasoningEffort },
+    ai: { key: env.OPENAI_API_KEY || '', model: initialAssistantDefaults.model, effort: initialAssistantDefaults.reasoningEffort,
+      transcriptionModel: env.WHATSAPP_TRANSCRIPTION_MODEL?.trim() || 'gpt-transcribe' },
     google: { clientId: env.GOOGLE_CLIENT_ID || '', secret: env.GOOGLE_CLIENT_SECRET || '' },
     notifications: { wabaId: env.WHATSAPP_BUSINESS_ACCOUNT_ID || '', language: 'pt_BR',
       summaryTemplate: env.WHATSAPP_SUMMARY_TEMPLATE || '', reminderTemplate: env.WHATSAPP_REMINDER_TEMPLATE || '',

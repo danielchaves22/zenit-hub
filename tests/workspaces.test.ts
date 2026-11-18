@@ -12,7 +12,7 @@ import { resolveWorkspace, workspaceMenu, workspaceScope } from '../src/workspac
 import { Notifications } from '../src/notifications.js';
 
 const config = readConfig({ DATABASE_URL: 'postgres://test@localhost/zenit_hub_test',
-  HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), OPENAI_API_KEY: 'test', OPENAI_MODEL: 'test' });
+  HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), OPENAI_API_KEY: 'test' });
 const personal: Workspace = { id: 3, name: 'Casa Daniel', personal: true, reference: '7:3', cash: true, bizz: false };
 const business: Workspace = { id: 4, name: 'Empresa X', personal: false, reference: '7:4', cash: true, bizz: true };
 const message = (text: string, button?: string) => ({ id: 'wamid.test', sender: 'alice', text, button, timestamp: Date.now() / 1000 });

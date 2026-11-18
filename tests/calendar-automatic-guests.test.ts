@@ -12,7 +12,7 @@ import { createTestStore } from './database-helper.js';
 import type { Reply, Connection } from '../src/types.js';
 
 const config = readConfig({ DATABASE_URL: 'postgresql://localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  OPENAI_API_KEY: 'test', OPENAI_MODEL: 'test', WHATSAPP_GUESTS_FLOW_ID: '123' });
+  OPENAI_API_KEY: 'test', WHATSAPP_GUESTS_FLOW_ID: '123' });
 const connection: Connection = { sender: 'alice', provider: 'calendar', accountId: 'account-alice', label: 'alice@example.com',
   tokens: { access_token: 'test', refresh_token: 'test', expires_at: Date.now() + 3600000, scope: googleScopes.join(' ') } };
 const create = { operation: 'create', calendarId: 'primary', eventId: null, title: 'Almoço', description: null, location: null,

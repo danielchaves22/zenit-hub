@@ -12,7 +12,7 @@ import { digest } from '../src/security.js';
 import type { Reply, Connection } from '../src/types.js';
 
 const config = readConfig({ DATABASE_URL: 'postgresql://localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  OPENAI_API_KEY: 'test', OPENAI_MODEL: 'test' });
+  OPENAI_API_KEY: 'test' });
 const connection: Connection = { sender: 'alice', provider: 'calendar', accountId: 'google-alice', label: 'alice@example.com',
   tokens: { access_token: 'secret', refresh_token: 'refresh', expires_at: Date.now() + 3600000, scope: googleScopes.join(' ') } };
 const request = { calendarId: 'primary', eventId: 'event123', names: null };

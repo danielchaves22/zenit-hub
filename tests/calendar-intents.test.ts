@@ -10,7 +10,7 @@ import type { Connection } from '../src/types.js';
 import { createTestStore } from './database-helper.js';
 
 const config = readConfig({ DATABASE_URL: 'postgresql://localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  OPENAI_API_KEY: 'synthetic-key', OPENAI_MODEL: 'synthetic-model' });
+  OPENAI_API_KEY: 'synthetic-key' });
 const connection: Connection = { sender: 'alice', provider: 'calendar', accountId: 'account-alice', label: 'alice@example.test',
   tokens: { access_token: 'synthetic-token', refresh_token: 'synthetic-refresh', expires_at: Date.now() + 3600_000,
     scope: 'https://www.googleapis.com/auth/calendar.events' } };

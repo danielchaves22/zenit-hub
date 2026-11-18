@@ -7,7 +7,7 @@ import { OAuth } from '../src/oauth.js';
 import { createTestStore } from './database-helper.js';
 
 const config = readConfig({ DATABASE_URL: 'postgresql://localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  OPENAI_API_KEY: 'synthetic-key', OPENAI_MODEL: 'synthetic-model' });
+  OPENAI_API_KEY: 'synthetic-key' });
 const move = { calendarId: 'primary', eventId: 'missa123', date: '2026-10-12' };
 const query = { calendarId: 'primary', start: '2026-12-12T00:00:00-03:00', end: '2026-12-13T00:00:00-03:00', limit: 20 };
 const change = { operation: 'update', calendarId: 'primary', eventId: 'missa123', title: null, description: null, location: null,

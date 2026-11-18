@@ -10,16 +10,14 @@ import { OAuth } from '../src/oauth.js';
 import { Day } from '../src/connectors/day.js';
 import { Calendar } from '../src/connectors/calendar.js';
 
-test('integrated chat starts with Sol low regardless of old Render model settings and keeps its audio model', () => {
+test('chat starts with Sol low with or without a Cash bridge and keeps its configured audio model', () => {
   const env = { DATABASE_URL: 'postgresql://localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-    OPENAI_MODEL: 'previous-model', OPENAI_REASONING_EFFORT: 'none', WHATSAPP_TRANSCRIPTION_MODEL: 'audio-test' };
+    OPENAI_API_KEY: 'test', WHATSAPP_TRANSCRIPTION_MODEL: 'audio-test' };
   const standalone = readConfig(env);
-  assert.equal(standalone.ai.model, 'previous-model');
-  assert.equal(standalone.ai.effort, 'none');
   const integrated = readConfig({ ...env, CASH_API_URL: 'https://cash.example', CASH_HUB_SHARED_SECRET: 'a'.repeat(32) });
-  assert.equal(integrated.ai.model, 'gpt-6.2-sol');
-  assert.equal(integrated.ai.effort, 'low');
-  assert.equal(integrated.ai.transcriptionModel, 'audio-test');
+  const expected = { key: 'test', model: 'gpt-6.2-sol', effort: 'low', transcriptionModel: 'audio-test' };
+  assert.deepEqual(standalone.ai, expected);
+  assert.deepEqual(integrated.ai, expected);
 });
 
 test('one refresh serves concurrent turns, updates the persisted default and falls back on restart', async () => {

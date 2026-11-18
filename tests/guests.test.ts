@@ -13,7 +13,7 @@ import { metaSignature, randomToken } from '../src/security.js';
 import type { Reply, Connection } from '../src/types.js';
 
 const config = readConfig({ DATABASE_URL: 'postgresql://localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  WHATSAPP_APP_SECRET: 'test-secret', WHATSAPP_PHONE_NUMBER_ID: '1234', WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_GUESTS_FLOW_ID: '5678', OPENAI_API_KEY: 'test', OPENAI_MODEL: 'test' });
+  WHATSAPP_APP_SECRET: 'test-secret', WHATSAPP_PHONE_NUMBER_ID: '1234', WHATSAPP_ACCESS_TOKEN: 'test-token', WHATSAPP_GUESTS_FLOW_ID: '5678', OPENAI_API_KEY: 'test' });
 const token = (r: Reply) => r.buttons![0].id.split(':')[3];
 const create = { operation: 'create', calendarId: 'primary', eventId: null, title: 'Reunião', description: null, location: null,
   start: '2026-12-23T14:00:00-03:00', end: '2026-12-23T17:00:00-03:00', allDay: false, reminderMinutes: null, timingEvidence: 'das 14h às 17h' };

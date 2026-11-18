@@ -18,7 +18,6 @@ const config = readConfig({
   DATABASE_URL: 'postgres://test@localhost/zenit_hub_test',
   HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
   OPENAI_API_KEY: 'test-model-secret',
-  OPENAI_MODEL: 'test',
   DAY_SITE_URL: 'https://day.example.test',
   WHATSAPP_APP_SECRET: 'signature-secret',
   WHATSAPP_PHONE_NUMBER_ID: 'phone',

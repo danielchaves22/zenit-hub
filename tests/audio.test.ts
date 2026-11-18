@@ -12,7 +12,7 @@ import { Worker } from '../src/worker.js';
 import { bridgeSignature, metaSignature } from '../src/security.js';
 const config = readConfig({ DATABASE_URL: 'postgresql://test:test@localhost/zenit_hub_test', HUB_ENCRYPTION_KEY: randomBytes(32).toString('base64'), WHATSAPP_APP_SECRET: 'test-meta-secret',
   WHATSAPP_PHONE_NUMBER_ID: 'phone-1', WHATSAPP_ACCESS_TOKEN: 'test-meta-token',
-  OPENAI_API_KEY: 'test-ai-key', OPENAI_MODEL: 'test-model',
+  OPENAI_API_KEY: 'test-ai-key',
   CASH_API_URL: 'https://cash.example', CASH_HUB_SHARED_SECRET: 'test-only-cash-secret-with-more-than-32-characters' });
 const sender = '5544999990000';
 function envelope(messages: object[]) {
@@ -133,7 +133,7 @@ test('voice and typed corrections share the original transcript and Cash draft w
     const cash = { connected: async () => true, message: async (message: unknown) => {
       received.push(message); return [{ text: received.length === 1 ? 'Aguardando confirmação: despesa de R$ 50,00.' : 'Rascunho corrigido: R$ 45,00.' }];
     } };
-    const withAI = { ...config, ai: { ...config.ai, key: 'test-key', model: 'test-model' } };
+    const withAI = { ...config, ai: { ...config.ai, key: 'test-key' } };
     const assistant = new Assistant(withAI, store, new OAuth(config, store), cash as any, {} as any, {} as any,
       (async (_url, init) => {
         modelCalls++;
